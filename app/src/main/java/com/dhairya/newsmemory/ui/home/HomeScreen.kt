@@ -16,8 +16,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+private fun relativeTime(then: Long?, now: Long = System.currentTimeMillis()): String {
+    if (then == null) return "never"
+    val mins = (now - then) / 60_000
+    return when {
+        mins < 1 -> "just now"
+        mins < 60 -> "$mins min ago"
+        mins < 48 * 60 -> "${mins / 60} h ${mins % 60} min ago"
+        else -> "${mins / (60 * 24)} days ago"
+    }
+}
+
 /**
- * Phase 2 placeholder home: capture/allowlist status only.
+ * Phase 3 home: capture/allowlist/heartbeat status.
  * Phase 4 replaces this with today's three digest cards.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -25,6 +36,8 @@ import androidx.compose.ui.unit.dp
 fun HomeScreen(
     capturedCount: Int,
     allowlistSize: Int,
+    listenerLastAlive: Long?,
+    lastCapturedAt: Long?,
     onEditAllowlist: () -> Unit
 ) {
     Scaffold(
@@ -52,7 +65,15 @@ fun HomeScreen(
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Text(
-                        "Digests arrive in Phase 4 — capture begins in Phase 3.",
+                        "Listener alive: ${relativeTime(listenerLastAlive)}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        "Last capture: ${relativeTime(lastCapturedAt)}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        "Digests arrive in Phase 4.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline
                     )

@@ -60,6 +60,9 @@ private fun NewsMemoryApp(container: AppContainer) {
     val batteryAck by container.settingsStore.batteryAcknowledged.collectAsState(initial = false)
     val allowlist by container.settingsStore.allowlist.collectAsState(initial = emptySet())
     val capturedCount by container.database.rawNotificationDao().count().collectAsState(initial = 0)
+    val lastAlive by container.settingsStore.lastAlive.collectAsState(initial = null)
+    val lastCaptured by container.database.rawNotificationDao().lastCapturedFlow()
+        .collectAsState(initial = null)
 
     // Re-shown if any grant is revoked (EDD §8): re-check core grants on every resume.
     var coreGranted by remember { mutableStateOf(Permissions.grantState(context).coreGranted) }
@@ -122,6 +125,8 @@ private fun NewsMemoryApp(container: AppContainer) {
             HomeScreen(
                 capturedCount = capturedCount,
                 allowlistSize = allowlist.size,
+                listenerLastAlive = lastAlive,
+                lastCapturedAt = lastCaptured,
                 onEditAllowlist = { navController.navigate(Routes.ALLOWLIST) }
             )
         }

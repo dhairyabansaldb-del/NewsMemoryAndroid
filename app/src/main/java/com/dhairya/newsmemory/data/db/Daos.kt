@@ -29,6 +29,9 @@ interface RawNotificationDao {
     @Query("SELECT MAX(captured_at) FROM raw_notifications")
     suspend fun lastCapturedAt(): Long?
 
+    @Query("SELECT MAX(captured_at) FROM raw_notifications")
+    fun lastCapturedFlow(): Flow<Long?>
+
     @Query("SELECT * FROM raw_notifications ORDER BY posted_at DESC LIMIT :limit")
     suspend fun latest(limit: Int): List<RawNotification>
 
