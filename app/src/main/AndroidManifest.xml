@@ -55,5 +55,17 @@
             </intent-filter>
         </service>
 
+        <receiver
+            android:name=".pipeline.DigestAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".pipeline.BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
     </application>
 </manifest>
