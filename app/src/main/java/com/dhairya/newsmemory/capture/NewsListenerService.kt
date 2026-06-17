@@ -3,6 +3,7 @@ package com.dhairya.newsmemory.capture
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.util.Log
 import com.dhairya.newsmemory.App
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +18,10 @@ import kotlinx.coroutines.launch
  * classify the notification shape, resolve real headlines, persist, then INTERCEPT
  * (cancel) so the notification leaves the system shade and lives only in News Memory.
  *
+ * On connect we also sweep getActiveNotifications() — notifications already in the shade
+ * (e.g. posted while we were unbound across a reinstall/reboot) are never delivered to
+ * onNotificationPosted, so without this sweep they'd be neither captured nor intercepted.
+ *
  * Heartbeat (EDD §4.3): last_alive on every capture, on connect, and on a 15-min timer.
  */
 class NewsListenerService : NotificationListenerService() {
@@ -27,7 +32,10 @@ class NewsListenerService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        Log.d(TAG, "listener connected")
         scope.launch { container.settingsStore.heartbeat() }
+        // Sweep the existing shade backlog.
+        runCatching { activeNotifications }.getOrNull()?.forEach { handle(it, fromBacklog = true) }
         scope.launch {
             while (isActive) {
                 delay(HEARTBEAT_INTERVAL_MS)
@@ -36,7 +44,9 @@ class NewsListenerService : NotificationListenerService() {
         }
     }
 
-    override fun onNotificationPosted(sbn: StatusBarNotification) {
+    override fun onNotificationPosted(sbn: StatusBarNotification) = handle(sbn, fromBacklog = false)
+
+    private fun handle(sbn: StatusBarNotification, fromBacklog: Boolean) {
         // FIRST LINE: non-allowlisted content is never touched (EDD §4.1).
         val allowlist = container.settingsStore.allowlistSnapshot()
         if (sbn.packageName !in allowlist) return
@@ -55,11 +65,14 @@ class NewsListenerService : NotificationListenerService() {
             val result = container.notificationRepository.insertExtracted(packageName, items, postTime)
             if (result.anyUnparseable) container.settingsStore.flagLimitedSupport(packageName)
             container.settingsStore.heartbeat()
+            Log.d(TAG, "captured ${result.inserted} from $packageName (backlog=$fromBacklog)")
         }
 
         // INTERCEPT (Phase B): pull it from the shade now that it's captured. Global for all
         // allowlisted apps. Can't pre-empt the post, so a brief blip is possible.
         runCatching { cancelNotification(key) }
+            .onSuccess { Log.d(TAG, "intercepted (cancelled) $packageName key=$key") }
+            .onFailure { Log.w(TAG, "cancel failed for $packageName", it) }
     }
 
     /** Pull every text-bearing extra out of the notification for the classifier. */
@@ -99,5 +112,6 @@ class NewsListenerService : NotificationListenerService() {
 
     companion object {
         const val HEARTBEAT_INTERVAL_MS = 15L * 60 * 1000
+        private const val TAG = "NewsListener"
     }
 }
