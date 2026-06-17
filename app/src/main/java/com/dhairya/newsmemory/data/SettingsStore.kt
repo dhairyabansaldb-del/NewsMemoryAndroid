@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.dhairya.newsmemory.pipeline.DigestTimes
@@ -41,6 +42,7 @@ class SettingsStore(private val context: Context) {
         val BATTERY_ACK = booleanPreferencesKey("battery_risk_acknowledged")
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         val LIMITED_SUPPORT = stringSetPreferencesKey("limited_support_packages")
+        val THEME_MODE = stringPreferencesKey("theme_mode")
     }
 
     // --- Allowlist ---
@@ -113,5 +115,14 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit {
             it[Keys.LIMITED_SUPPORT] = (it[Keys.LIMITED_SUPPORT] ?: emptySet()) + packageName
         }
+    }
+
+    // --- Theme (light / dark / auto; default auto) ---
+
+    val themeMode: Flow<String> =
+        context.dataStore.data.map { it[Keys.THEME_MODE] ?: "AUTO" }
+
+    suspend fun setThemeMode(mode: String) {
+        context.dataStore.edit { it[Keys.THEME_MODE] = mode }
     }
 }

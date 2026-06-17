@@ -1,44 +1,68 @@
 package com.dhairya.newsmemory.ui.theme
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.text.font.FontWeight
 
-private val DarkColorScheme = darkColorScheme(
-    primary = Indigo80,
-    secondary = IndigoGrey80,
-    tertiary = Accent80
-)
+enum class ThemeMode { LIGHT, DARK, AUTO;
+    companion object {
+        fun from(value: String?): ThemeMode = entries.firstOrNull { it.name == value } ?: AUTO
+    }
+}
 
-private val LightColorScheme = lightColorScheme(
-    primary = Indigo40,
-    secondary = IndigoGrey40,
-    tertiary = Accent40
-)
+private fun materialScheme(a: AlmanacColors) =
+    if (a.isDark) darkColorScheme(
+        primary = a.accent, onPrimary = a.accentInk,
+        secondary = a.accent, onSecondary = a.accentInk,
+        background = a.bg, onBackground = a.ink,
+        surface = a.card, onSurface = a.ink,
+        surfaceVariant = a.card2, onSurfaceVariant = a.inkMed,
+        outline = a.line2, error = a.warn
+    ) else lightColorScheme(
+        primary = a.accent, onPrimary = a.accentInk,
+        secondary = a.accent, onSecondary = a.accentInk,
+        background = a.bg, onBackground = a.ink,
+        surface = a.card, onSurface = a.ink,
+        surfaceVariant = a.card2, onSurfaceVariant = a.inkMed,
+        outline = a.line2, error = a.warn
+    )
+
+private fun typography(a: AlmanacColors) = Typography().run {
+    val base = body(14.0)
+    Typography(
+        headlineMedium = display(27),
+        titleLarge = display(18),
+        titleMedium = body(14.0, FontWeight.SemiBold),
+        titleSmall = Eyebrow,
+        bodyLarge = body(14.0),
+        bodyMedium = body(12.5),
+        bodySmall = body(11.5),
+        labelSmall = PillLabel,
+        labelMedium = body(11.0, FontWeight.Medium)
+    )
+}
 
 @Composable
 fun NewsMemoryTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    themeMode: ThemeMode = ThemeMode.AUTO,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
+    val dark = when (themeMode) {
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+        ThemeMode.AUTO -> isSystemInDarkTheme()
     }
-
-    MaterialTheme(
-        colorScheme = colorScheme,
-        content = content
-    )
+    val almanac = if (dark) AlmanacDark else AlmanacLight
+    CompositionLocalProvider(LocalAlmanac provides almanac) {
+        MaterialTheme(
+            colorScheme = materialScheme(almanac),
+            typography = typography(almanac),
+            content = content
+        )
+    }
 }

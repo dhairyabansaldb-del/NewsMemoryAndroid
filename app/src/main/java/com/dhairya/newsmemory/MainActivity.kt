@@ -5,16 +5,38 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Today
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
@@ -24,11 +46,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.dhairya.newsmemory.pipeline.DigestNotifier
 import com.dhairya.newsmemory.pipeline.DigestSlot
-import com.dhairya.newsmemory.pipeline.WindowCalculator
+import com.dhairya.newsmemory.pipeline.DigestTimes
 import com.dhairya.newsmemory.ui.allowlist.AllowlistScreen
 import com.dhairya.newsmemory.ui.allowlist.AllowlistViewModel
 import com.dhairya.newsmemory.ui.archive.ArchiveScreen
@@ -36,7 +59,12 @@ import com.dhairya.newsmemory.ui.digest.DigestDetailScreen
 import com.dhairya.newsmemory.ui.home.HomeScreen
 import com.dhairya.newsmemory.ui.home.SlotCard
 import com.dhairya.newsmemory.ui.onboarding.OnboardingScreen
+import com.dhairya.newsmemory.ui.settings.HealthStatus
+import com.dhairya.newsmemory.ui.settings.SettingsScreen
+import com.dhairya.newsmemory.ui.theme.LocalAlmanac
 import com.dhairya.newsmemory.ui.theme.NewsMemoryTheme
+import com.dhairya.newsmemory.ui.theme.ThemeMode
+import com.dhairya.newsmemory.ui.theme.body
 import com.dhairya.newsmemory.util.Permissions
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -46,14 +74,14 @@ private object Routes {
     const val ONBOARDING = "onboarding"
     const val ALLOWLIST_SETUP = "allowlist_setup"
     const val ALLOWLIST = "allowlist"
-    const val HOME = "home"
+    const val TODAY = "today"
     const val ARCHIVE = "archive"
+    const val SETTINGS = "settings"
     const val DIGEST = "digest/{digestId}"
     fun digest(id: String) = "digest/$id"
 }
 
 class MainActivity : ComponentActivity() {
-
     private val pendingDigestId = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -62,10 +90,9 @@ class MainActivity : ComponentActivity() {
         pendingDigestId.value = intent.getStringExtra(DigestNotifier.EXTRA_DIGEST_ID)
         val container = (application as App).container
         setContent {
-            NewsMemoryTheme {
-                NewsMemoryApp(container, pendingDigestId.value) {
-                    pendingDigestId.value = null
-                }
+            val mode by container.settingsStore.themeMode.collectAsState(initial = "AUTO")
+            NewsMemoryTheme(themeMode = ThemeMode.from(mode)) {
+                NewsMemoryApp(container, pendingDigestId.value) { pendingDigestId.value = null }
             }
         }
     }
@@ -77,133 +104,193 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun NewsMemoryApp(
-    container: AppContainer,
-    pendingDigestId: String?,
-    onDigestConsumed: () -> Unit
-) {
+private fun NewsMemoryApp(container: AppContainer, pendingDigestId: String?, onConsumed: () -> Unit) {
     val context = LocalContext.current
-    val navController = rememberNavController()
+    val nav = rememberNavController()
     val scope = rememberCoroutineScope()
+    val a = LocalAlmanac.current
 
     val onboardingDone by container.settingsStore.onboardingDone.collectAsState(initial = null)
     val batteryAck by container.settingsStore.batteryAcknowledged.collectAsState(initial = false)
     val allowlist by container.settingsStore.allowlist.collectAsState(initial = emptySet())
-    val capturedCount by container.database.rawNotificationDao().count().collectAsState(initial = 0)
     val lastAlive by container.settingsStore.lastAlive.collectAsState(initial = null)
-    val lastCaptured by container.database.rawNotificationDao().lastCapturedFlow()
-        .collectAsState(initial = null)
-    val times by container.settingsStore.digestTimes
-        .collectAsState(initial = com.dhairya.newsmemory.pipeline.DigestTimes())
-    val allDigests by container.database.digestDao().allDigests()
-        .collectAsState(initial = emptyList())
+    val lastCaptured by container.database.rawNotificationDao().lastCapturedFlow().collectAsState(initial = null)
+    val times by container.settingsStore.digestTimes.collectAsState(initial = DigestTimes())
+    val themeMode by container.settingsStore.themeMode.collectAsState(initial = "AUTO")
+    val allDigests by container.database.digestDao().allDigests().collectAsState(initial = emptyList())
 
-    // Today's three slot cards
     val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
+    val todayItems by container.database.digestDao().itemsForDate(today).collectAsState(initial = emptyList())
+
     val slotCards = DigestSlot.entries.map { slot ->
         val id = "$today-${slot.code}"
-        SlotCard(
-            slot = slot,
-            digest = allDigests.firstOrNull { it.id == id },
-            deliveryMinutes = times.minutesFor(slot)
-        )
+        SlotCard(slot, allDigests.firstOrNull { it.id == id }, times.minutesFor(slot))
+    }
+    val topicCounts = todayItems.groupingBy { it.topicLabel }.eachCount()
+        .entries.sortedByDescending { it.value }.take(5).map { it.key to it.value }
+
+    // App labels for the listening strip monograms (cheap for a handful of packages)
+    val listeningLabels = remember(allowlist) {
+        allowlist.mapNotNull { pkg ->
+            runCatching {
+                context.packageManager.getApplicationLabel(
+                    context.packageManager.getApplicationInfo(pkg, 0)
+                ).toString()
+            }.getOrNull()
+        }
     }
 
-    // Re-shown if any grant is revoked (EDD §8)
     var coreGranted by remember { mutableStateOf(Permissions.grantState(context).coreGranted) }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                coreGranted = Permissions.grantState(context).coreGranted
+    var batteryOk by remember { mutableStateOf(Permissions.grantState(context).batteryUnrestricted) }
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) {
+                val g = Permissions.grantState(context)
+                coreGranted = g.coreGranted; batteryOk = g.batteryUnrestricted
             }
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
     }
 
     val done = onboardingDone ?: return
-    val startRoute = if (done && coreGranted) Routes.HOME else Routes.ONBOARDING
+    val start = if (done && coreGranted) Routes.TODAY else Routes.ONBOARDING
 
-    // Notification tap → straight to that digest
-    LaunchedEffect(pendingDigestId, done) {
-        if (pendingDigestId != null && done) {
-            navController.navigate(Routes.digest(pendingDigestId))
-            onDigestConsumed()
-        }
+    androidx.compose.runtime.LaunchedEffect(pendingDigestId, done) {
+        if (pendingDigestId != null && done) { nav.navigate(Routes.digest(pendingDigestId)); onConsumed() }
     }
 
-    val allowlistVmFactory = remember {
+    val vmFactory = remember {
         object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                AllowlistViewModel(
-                    context.packageManager,
-                    container.settingsStore,
-                    context.packageName
-                ) as T
+            override fun <T : ViewModel> create(c: Class<T>): T =
+                AllowlistViewModel(context.packageManager, container.settingsStore, context.packageName) as T
         }
     }
 
-    NavHost(navController = navController, startDestination = startRoute) {
-        composable(Routes.ONBOARDING) {
-            OnboardingScreen(
-                batteryAcknowledged = batteryAck,
-                onAcknowledgeBattery = { value ->
-                    scope.launch { container.settingsStore.setBatteryAcknowledged(value) }
-                },
-                onComplete = { navController.navigate(Routes.ALLOWLIST_SETUP) }
-            )
-        }
-        composable(Routes.ALLOWLIST_SETUP) {
-            AllowlistScreen(
-                viewModel = viewModel(factory = allowlistVmFactory),
-                continueLabel = "Done",
-                onContinue = {
+    val backEntry by nav.currentBackStackEntryAsState()
+    val route = backEntry?.destination?.route
+    val showNav = route in setOf(Routes.TODAY, Routes.ARCHIVE, Routes.SETTINGS)
+
+    fun minsAgo(t: Long?): Long? = t?.let { (System.currentTimeMillis() - it) / 60000 }
+
+    Scaffold(
+        containerColor = a.bg,
+        bottomBar = { if (showNav) BottomNav(route) { nav.navigateTab(it) } }
+    ) { pad ->
+        NavHost(nav, startDestination = start, modifier = Modifier.padding(pad)) {
+            composable(Routes.ONBOARDING) {
+                OnboardingScreen(
+                    batteryAcknowledged = batteryAck,
+                    onAcknowledgeBattery = { v -> scope.launch { container.settingsStore.setBatteryAcknowledged(v) } },
+                    onComplete = { nav.navigate(Routes.ALLOWLIST_SETUP) }
+                )
+            }
+            composable(Routes.ALLOWLIST_SETUP) {
+                AllowlistScreen(viewModel(factory = vmFactory), showBack = false, onBack = {})
+                // continue affordance: a simple bottom button via overlay
+                SetupContinue {
                     scope.launch { container.settingsStore.setOnboardingDone(true) }
-                    navController.navigate(Routes.HOME) {
-                        popUpTo(Routes.ONBOARDING) { inclusive = true }
-                    }
+                    nav.navigate(Routes.TODAY) { popUpTo(Routes.ONBOARDING) { inclusive = true } }
                 }
-            )
+            }
+            composable(Routes.ALLOWLIST) {
+                AllowlistScreen(viewModel(factory = vmFactory), showBack = true, onBack = { nav.popBackStack() })
+            }
+            composable(Routes.TODAY) {
+                HomeScreen(
+                    dateLabel = LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, d MMMM")),
+                    slotCards = slotCards, times = times, topicCounts = topicCounts,
+                    listeningCount = allowlist.size, listeningLabels = listeningLabels,
+                    onOpenDigest = { nav.navigate(Routes.digest(it)) },
+                    onEditAllowlist = { nav.navigate(Routes.ALLOWLIST) }
+                )
+            }
+            composable(Routes.ARCHIVE) {
+                ArchiveScreen(container.database) { nav.navigate(Routes.digest(it)) }
+            }
+            composable(Routes.SETTINGS) {
+                SettingsScreen(
+                    themeMode = ThemeMode.from(themeMode),
+                    onSetTheme = { scope.launch { container.settingsStore.setThemeMode(it.name) } },
+                    times = times,
+                    onSetTimes = { scope.launch { container.settingsStore.setDigestTimes(it) } },
+                    allowlistSize = allowlist.size,
+                    health = HealthStatus(minsAgo(lastAlive), minsAgo(lastCaptured), batteryOk),
+                    onOpenAllowlist = { nav.navigate(Routes.ALLOWLIST) },
+                    onExport = { /* JSON export wired in Phase 5 */ }
+                )
+            }
+            composable(
+                Routes.DIGEST,
+                arguments = listOf(navArgument("digestId") { type = NavType.StringType })
+            ) { entry ->
+                val id = entry.arguments?.getString("digestId") ?: return@composable
+                DigestDetailScreen(id, container.database) { nav.popBackStack() }
+            }
         }
-        composable(Routes.ALLOWLIST) {
-            AllowlistScreen(
-                viewModel = viewModel(factory = allowlistVmFactory),
-                continueLabel = null,
-                onContinue = {}
-            )
+    }
+}
+
+private fun androidx.navigation.NavController.navigateTab(route: String) {
+    navigate(route) {
+        popUpTo(Routes.TODAY) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+}
+
+@Composable
+private fun BottomNav(current: String?, onSelect: (String) -> Unit) {
+    val a = LocalAlmanac.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(a.card)
+            .navigationBarsPadding()
+            .padding(vertical = 8.dp, horizontal = 16.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        NavItem("Today", Icons.Filled.Today, current == Routes.TODAY) { onSelect(Routes.TODAY) }
+        NavItem("Archive", Icons.Filled.Inventory2, current == Routes.ARCHIVE) { onSelect(Routes.ARCHIVE) }
+        NavItem("Settings", Icons.Filled.Settings, current == Routes.SETTINGS) { onSelect(Routes.SETTINGS) }
+    }
+}
+
+@Composable
+private fun NavItem(label: String, icon: ImageVector, active: Boolean, onClick: () -> Unit) {
+    val a = LocalAlmanac.current
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onClick)) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(13.dp))
+                .background(if (active) a.accent.copy(alpha = 0.13f) else androidx.compose.ui.graphics.Color.Transparent)
+                .padding(horizontal = 18.dp, vertical = 4.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, label, tint = if (active) a.accent else a.inkMed, modifier = Modifier.size(22.dp))
         }
-        composable(Routes.HOME) {
-            HomeScreen(
-                slotCards = slotCards,
-                times = times,
-                capturedCount = capturedCount,
-                allowlistSize = allowlist.size,
-                listenerLastAlive = lastAlive,
-                lastCapturedAt = lastCaptured,
-                onOpenDigest = { navController.navigate(Routes.digest(it)) },
-                onOpenArchive = { navController.navigate(Routes.ARCHIVE) },
-                onEditAllowlist = { navController.navigate(Routes.ALLOWLIST) }
-            )
-        }
-        composable(Routes.ARCHIVE) {
-            ArchiveScreen(
-                db = container.database,
-                onOpenDigest = { navController.navigate(Routes.digest(it)) },
-                onBack = { navController.popBackStack() }
-            )
-        }
-        composable(
-            Routes.DIGEST,
-            arguments = listOf(navArgument("digestId") { type = NavType.StringType })
-        ) { backStack ->
-            val digestId = backStack.arguments?.getString("digestId") ?: return@composable
-            DigestDetailScreen(
-                digestId = digestId,
-                db = container.database,
-                onBack = { navController.popBackStack() }
-            )
+        Text(label, style = body(10.5), color = if (active) a.ink else a.inkLow)
+    }
+}
+
+/** First-run "Done" affordance pinned at the bottom of the setup allowlist. */
+@Composable
+private fun SetupContinue(onDone: () -> Unit) {
+    val a = LocalAlmanac.current
+    Box(Modifier.fillMaxWidth().padding(18.dp), contentAlignment = Alignment.BottomCenter) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(a.accent)
+                .clickable(onClick = onDone)
+                .padding(vertical = 14.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("Done", style = body(14.0), color = a.accentInk)
         }
     }
 }

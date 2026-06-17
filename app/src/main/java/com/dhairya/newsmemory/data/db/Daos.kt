@@ -66,6 +66,10 @@ interface DigestDao {
     @Query("SELECT * FROM digest_items WHERE digest_id = :digestId ORDER BY position")
     fun itemsForFlow(digestId: String): Flow<List<DigestItem>>
 
+    /** All items for one day's digests; window_id is "YYYY-MM-DD-{M|E|N}". */
+    @Query("SELECT * FROM digest_items WHERE digest_id LIKE :datePrefix || '%' ORDER BY position")
+    fun itemsForDate(datePrefix: String): Flow<List<DigestItem>>
+
     @Query(
         """SELECT rn.* FROM raw_notifications rn
            JOIN item_sources s ON s.raw_id = rn.id
