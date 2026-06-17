@@ -18,7 +18,7 @@ import androidx.room.RoomDatabase
         TrackedEntity::class,
         ItemEntityCrossRef::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = true
 )
 abstract class ArchiveDatabase : RoomDatabase() {
@@ -29,6 +29,9 @@ abstract class ArchiveDatabase : RoomDatabase() {
     companion object {
         fun build(context: Context): ArchiveDatabase =
             Room.databaseBuilder(context, ArchiveDatabase::class.java, "archive.db")
+                // v2 expands raw_notifications (publisher + raw payload). Pre-accumulation,
+                // so a clean rebuild is acceptable rather than carrying a migration.
+                .fallbackToDestructiveMigration()
                 .build()
     }
 }

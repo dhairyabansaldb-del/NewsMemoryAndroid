@@ -61,7 +61,7 @@ class DigestPipeline(
             windowEnd = end,
             createdAt = now,
             itemCount = orderedClusters.size,
-            sourceCount = rows.map { it.packageName }.distinct().size,
+            sourceCount = rows.map { it.publisher ?: it.packageName }.distinct().size,
             pipelineMode = result.mode
         )
 
@@ -76,7 +76,7 @@ class DigestPipeline(
                         topicLabel = cluster.topicLabel,
                         headline = representative.title ?: representative.body ?: "",
                         sourceCount = cluster.stories.flatMap { it.members }
-                            .map { it.packageName }.distinct().size,
+                            .map { it.publisher ?: it.packageName }.distinct().size,
                         position = position
                     )
                 )

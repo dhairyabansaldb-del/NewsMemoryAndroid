@@ -23,9 +23,18 @@ import androidx.room.PrimaryKey
 )
 data class RawNotification(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    @androidx.room.ColumnInfo(name = "package_name") val packageName: String,
-    val title: String?,
-    val body: String?,
+    @androidx.room.ColumnInfo(name = "package_name") val packageName: String,  // source app
+    val publisher: String? = null,         // publisher within the app, e.g. "The Verge"; null → app
+    val title: String?,                    // RESOLVED headline (not raw EXTRA_TITLE)
+    val body: String?,                     // RESOLVED secondary line
+    // Raw payload preserved for Groq / re-derivation (EDD schema-as-substrate principle)
+    @androidx.room.ColumnInfo(name = "raw_title") val rawTitle: String? = null,
+    @androidx.room.ColumnInfo(name = "raw_text") val rawText: String? = null,
+    @androidx.room.ColumnInfo(name = "big_text") val bigText: String? = null,
+    @androidx.room.ColumnInfo(name = "sub_text") val subText: String? = null,
+    @androidx.room.ColumnInfo(name = "text_lines") val textLines: String? = null,
+    val template: String? = null,
+    @androidx.room.ColumnInfo(name = "parse_quality") val parseQuality: String = "FULL",
     @androidx.room.ColumnInfo(name = "content_hash") val contentHash: String,
     @androidx.room.ColumnInfo(name = "posted_at") val postedAt: Long,
     @androidx.room.ColumnInfo(name = "captured_at") val capturedAt: Long,

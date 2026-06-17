@@ -13,12 +13,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Capture layer (EDD §4.1). Dumb and fast by design: allowlist gate first,
- * extract, hash, insert, return. No network, no LLM, no clustering here.
+ * Capture layer (EDD §4.1, reworked in Phase A/B). Dumb and fast: allowlist gate first,
+ * classify the notification shape, resolve real headlines, persist, then INTERCEPT
+ * (cancel) so the notification leaves the system shade and lives only in News Memory.
  *
- * Heartbeat (EDD §4.3): last_alive written on every captured post and on a
- * 15-minute internal timer, so the rebinder and the health panel can tell a
- * live listener from a zombie one.
+ * Heartbeat (EDD §4.3): last_alive on every capture, on connect, and on a 15-min timer.
  */
 class NewsListenerService : NotificationListenerService() {
 
@@ -44,18 +43,53 @@ class NewsListenerService : NotificationListenerService() {
         if (sbn.isOngoing) return
         if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
 
-        val extras = sbn.notification.extras
-        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
-        val body = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
-            ?: extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
-        if (title.isNullOrBlank() && body.isNullOrBlank()) return
+        val input = buildInput(sbn) ?: return
+        val items = NotificationExtractor.extract(input)
+        if (items.isEmpty()) return
 
-        val postTime = sbn.postTime
         val packageName = sbn.packageName
+        val postTime = sbn.postTime
+        val key = sbn.key
+
         scope.launch {
-            container.notificationRepository.insertRaw(packageName, title, body, postTime)
+            val result = container.notificationRepository.insertExtracted(packageName, items, postTime)
+            if (result.anyUnparseable) container.settingsStore.flagLimitedSupport(packageName)
             container.settingsStore.heartbeat()
         }
+
+        // INTERCEPT (Phase B): pull it from the shade now that it's captured. Global for all
+        // allowlisted apps. Can't pre-empt the post, so a brief blip is possible.
+        runCatching { cancelNotification(key) }
+    }
+
+    /** Pull every text-bearing extra out of the notification for the classifier. */
+    private fun buildInput(sbn: StatusBarNotification): NotificationExtractor.Input? {
+        val extras = sbn.notification.extras
+        val lines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+            ?.mapNotNull { it?.toString() } ?: emptyList()
+        val appLabel = runCatching {
+            packageManager.getApplicationLabel(
+                packageManager.getApplicationInfo(sbn.packageName, 0)
+            ).toString()
+        }.getOrDefault(sbn.packageName)
+
+        val input = NotificationExtractor.Input(
+            packageName = sbn.packageName,
+            appLabel = appLabel,
+            title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString(),
+            text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString(),
+            bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString(),
+            subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString(),
+            infoText = extras.getCharSequence(Notification.EXTRA_INFO_TEXT)?.toString(),
+            summaryText = extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)?.toString(),
+            textLines = lines,
+            template = extras.getString(Notification.EXTRA_TEMPLATE)
+        )
+
+        // Nothing usable at all → don't even create a row.
+        val empty = input.title.isNullOrBlank() && input.text.isNullOrBlank() &&
+            input.bigText.isNullOrBlank() && lines.isEmpty()
+        return if (empty) null else input
     }
 
     override fun onDestroy() {

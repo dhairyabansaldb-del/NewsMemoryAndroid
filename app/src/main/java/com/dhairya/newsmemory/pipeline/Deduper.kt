@@ -51,7 +51,9 @@ object Deduper {
             MergedStory(
                 representative = members.maxBy { (it.title ?: it.body ?: "").length },
                 members = members,
-                sourceCount = members.map { it.packageName }.distinct().size
+                // Distinct publisher (falls back to package) — so multiple outlets surfaced
+                // through one aggregator app still count as separate sources.
+                sourceCount = members.map { it.publisher ?: it.packageName }.distinct().size
             )
         }.sortedByDescending { it.sourceCount }
     }

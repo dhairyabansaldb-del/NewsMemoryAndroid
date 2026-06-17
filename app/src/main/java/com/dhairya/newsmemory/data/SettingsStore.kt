@@ -40,6 +40,7 @@ class SettingsStore(private val context: Context) {
         val LAST_ALIVE = longPreferencesKey("listener_last_alive")
         val BATTERY_ACK = booleanPreferencesKey("battery_risk_acknowledged")
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
+        val LIMITED_SUPPORT = stringSetPreferencesKey("limited_support_packages")
     }
 
     // --- Allowlist ---
@@ -101,5 +102,16 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setOnboardingDone(value: Boolean) {
         context.dataStore.edit { it[Keys.ONBOARDING_DONE] = value }
+    }
+
+    // --- Apps whose notifications can't be parsed (allowlist "limited support" flag) ---
+
+    val limitedSupport: Flow<Set<String>> =
+        context.dataStore.data.map { it[Keys.LIMITED_SUPPORT] ?: emptySet() }
+
+    suspend fun flagLimitedSupport(packageName: String) {
+        context.dataStore.edit {
+            it[Keys.LIMITED_SUPPORT] = (it[Keys.LIMITED_SUPPORT] ?: emptySet()) + packageName
+        }
     }
 }
