@@ -36,7 +36,12 @@ object NotificationExtractor {
 
     /** Packages where EXTRA_TITLE is the publisher and the headline lives in EXTRA_TEXT. */
     private val AGGREGATOR_PACKAGES = setOf(
-        "com.google.android.apps.magazines"   // Google News  (extend via ADB calibration)
+        "com.google.android.apps.magazines"   // Google News (calibrated against live dump)
+    )
+
+    /** Placeholder bodies some apps post instead of a real headline — never store these. */
+    private val JUNK = setOf(
+        "you have a notification", "new message", "new notification", "1 new message"
     )
 
     data class Input(
@@ -63,33 +68,37 @@ object NotificationExtractor {
             }
         }
 
-        // Shape: aggregator → title is publisher, text is the headline
-        if (input.packageName in AGGREGATOR_PACKAGES) {
-            val headline = firstNonBlank(input.bigText, input.text)
-            if (headline != null) {
-                val publisher = firstNonBlank(input.title, input.subText) ?: input.appLabel
-                val snippet = firstNonBlank(input.subText)?.takeIf { !it.equalsNorm(headline) }
-                return listOf(item(input, headline, snippet, publisher, ParseQuality.FULL))
+        val aggregator = input.packageName in AGGREGATOR_PACKAGES
+        // Inshorts/Dailyhunt-style: the "title" is the app's own name (or absent), so the
+        // real headline lives in the text — using the title would show "inshorts".
+        val titleIsAppName = input.title.isNullOrBlank() ||
+            Normalizer.normalize(input.title!!).let { it.isNotEmpty() && it == Normalizer.normalize(input.appLabel) }
+
+        // Shape: aggregator (title = publisher) OR title is just the app name → headline is in the body
+        if (aggregator || titleIsAppName) {
+            val headline = firstNonBlank(input.text, input.bigText)
+            if (headline != null && !isJunk(headline)) {
+                val publisher = if (aggregator) firstNonBlank(input.title, input.subText) ?: input.appLabel
+                else firstNonBlank(input.subText) ?: input.appLabel
+                return listOf(item(input, headline, snippet = null, publisher = publisher, ParseQuality.FULL))
             }
-            // no usable text → fall through to standard handling
+            // No usable body. The title is only the publisher/app name, never a headline,
+            // so we don't fabricate one from it — mark unparseable.
+            val publisher = if (aggregator) firstNonBlank(input.title, input.subText) ?: input.appLabel
+            else input.appLabel
+            return listOf(item(input, input.title ?: input.appLabel, null, publisher, ParseQuality.UNPARSEABLE))
         }
 
-        // Shape: standard
+        // Shape: standard — title is a real headline
         val headline = firstNonBlank(input.title, input.text, input.bigText)
-        val snippet = firstNonBlank(input.bigText, input.text)
-            ?.takeIf { headline == null || !it.equalsNorm(headline) }
-        val publisher = firstNonBlank(input.subText) ?: input.appLabel
-
-        val quality = when {
-            headline == null -> ParseQuality.UNPARSEABLE
-            // Only the app's own name came through (custom-view notifications like Inshorts)
-            headline.equalsNorm(input.appLabel) && snippet == null -> ParseQuality.UNPARSEABLE
-            else -> ParseQuality.FULL
+        if (headline == null || isJunk(headline)) {
+            return listOf(
+                item(input, headline ?: input.appLabel, null, firstNonBlank(input.subText) ?: input.appLabel, ParseQuality.UNPARSEABLE)
+            )
         }
-
-        return listOf(
-            item(input, title = headline ?: input.appLabel, snippet = snippet, publisher = publisher, quality = quality)
-        )
+        val snippet = firstNonBlank(input.bigText, input.text)?.takeIf { !it.equalsNorm(headline) }
+        val publisher = firstNonBlank(input.subText) ?: input.appLabel
+        return listOf(item(input, headline, snippet, publisher, ParseQuality.FULL))
     }
 
     private fun item(
@@ -113,6 +122,8 @@ object NotificationExtractor {
 
     private fun firstNonBlank(vararg candidates: String?): String? =
         candidates.firstOrNull { !it.isNullOrBlank() }?.trim()
+
+    private fun isJunk(s: String): Boolean = Normalizer.normalize(s).let { it.isEmpty() || it in JUNK }
 
     private fun String.equalsNorm(other: String): Boolean =
         Normalizer.normalize(this) == Normalizer.normalize(other)

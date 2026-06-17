@@ -110,11 +110,52 @@ class NotificationExtractorTest {
     }
 
     @Test
-    fun `inshorts custom view with only the app name is unparseable`() {
+    fun `inshorts puts app name in title and headline in text`() {
+        // Real Inshorts payload from the live dump
+        val items = NotificationExtractor.extract(
+            input(
+                pkg = "com.nis.app", appLabel = "Inshorts", title = "inshorts",
+                text = "Mbappe shows off new celebration after scoring his 1st goal at FIFA World Cup 2026"
+            )
+        )
+        assertEquals(1, items.size)
+        assertEquals(
+            "Mbappe shows off new celebration after scoring his 1st goal at FIFA World Cup 2026",
+            items[0].title
+        )
+        assertEquals(ParseQuality.FULL, items[0].quality)
+    }
+
+    @Test
+    fun `inshorts with only the app name and no body is unparseable`() {
         val items = NotificationExtractor.extract(
             input(pkg = "com.nis.app", appLabel = "Inshorts", title = "inshorts")
         )
         assertEquals(1, items.size)
+        assertEquals(ParseQuality.UNPARSEABLE, items[0].quality)
+    }
+
+    @Test
+    fun `dailyhunt null title puts headline in text`() {
+        // Real Dailyhunt (com.eterno) payload: title null, headline in text
+        val items = NotificationExtractor.extract(
+            input(
+                pkg = "com.eterno", appLabel = "Dailyhunt", title = null,
+                text = "US drops 'Indo' from Indo-Pacific Command, sparks row over India map"
+            )
+        )
+        assertEquals("US drops 'Indo' from Indo-Pacific Command, sparks row over India map", items[0].title)
+        assertEquals(ParseQuality.FULL, items[0].quality)
+    }
+
+    @Test
+    fun `google news generic placeholder is filtered as junk`() {
+        val items = NotificationExtractor.extract(
+            input(
+                pkg = "com.google.android.apps.magazines", appLabel = "Google News",
+                title = "Google News", text = "You have a notification"
+            )
+        )
         assertEquals(ParseQuality.UNPARSEABLE, items[0].quality)
     }
 
@@ -130,15 +171,16 @@ class NotificationExtractorTest {
     }
 
     @Test
-    fun `aggregator with no body falls back to standard handling`() {
+    fun `aggregator with no body is unparseable, never the publisher as headline`() {
         val items = NotificationExtractor.extract(
             input(
                 pkg = "com.google.android.apps.magazines",
                 appLabel = "Google News",
-                title = "Breaking News Headline"
+                title = "The Verge"   // publisher only, no headline text
             )
         )
-        // No text → cannot be the publisher/headline split; title is the best headline we have
-        assertEquals("Breaking News Headline", items[0].title)
+        // We must not fabricate a headline from the publisher name
+        assertEquals(ParseQuality.UNPARSEABLE, items[0].quality)
+        assertEquals("The Verge", items[0].publisher)
     }
 }

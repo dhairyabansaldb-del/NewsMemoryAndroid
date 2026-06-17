@@ -18,3 +18,6 @@ Thumbs.db
 # APK outputs kept out of history
 *.apk
 *.aab
+
+# Diagnostic notification dumps — contain personal notification content
+notif-dump*.txt
