@@ -1,0 +1,38 @@
+package com.dhairya.newsmemory.llm
+
+import com.dhairya.newsmemory.llm.prompts.ClusteringPrompt
+import com.dhairya.newsmemory.pipeline.ClusterResult
+import com.dhairya.newsmemory.pipeline.Deduper
+import com.dhairya.newsmemory.pipeline.HeuristicClusterer
+
+/**
+ * Stage-3 clustering backed by Groq (EDD §5.2), with the always-available heuristic as a
+ * fallback. Plugs into [com.dhairya.newsmemory.pipeline.DigestPipeline] as its
+ * `clusterEngine`. ANY failure — network, HTTP, malformed JSON, or a response that doesn't
+ * partition the input — degrades to [HeuristicClusterer] and the resulting digest is
+ * tagged HEURISTIC, so degradation is visible and never silent.
+ */
+class GroqClusterEngine(
+    private val client: GroqClient,
+    private val model: String = CLUSTERING_MODEL
+) {
+
+    suspend fun cluster(stories: List<Deduper.MergedStory>): ClusterResult {
+        if (stories.isEmpty()) return ClusterResult(emptyList(), ClusterResult.MODE_HEURISTIC)
+        return try {
+            val content = client.complete(
+                model = model,
+                system = ClusteringPrompt.SYSTEM,
+                user = ClusteringPrompt.buildUser(stories)
+            )
+            ClusterResponseParser.parse(content, stories)
+        } catch (e: Exception) {
+            HeuristicClusterer.cluster(stories)
+        }
+    }
+
+    companion object {
+        /** Small/fast model for clustering; the v1 one-shot query uses the 70B model (EDD §7.2). */
+        const val CLUSTERING_MODEL = "llama-3.1-8b-instant"
+    }
+}
