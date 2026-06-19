@@ -72,8 +72,9 @@ fun HomeScreen(
     onEditAllowlist: () -> Unit
 ) {
     val a = LocalAlmanac.current
-    val hero = slotCards.firstOrNull { it.digest != null && it.digest.itemCount > 0 }?.digest
-        ?: slotCards.firstOrNull { it.digest != null }?.digest
+    // Hero = the most recently delivered digest, whatever slot it is — so opening the app
+    // at night surfaces the Night digest, not the first non-empty slot of the day.
+    val hero = slotCards.mapNotNull { it.digest }.maxByOrNull { it.createdAt }
     val next = slotCards.firstOrNull { it.digest == null }
 
     Column(
@@ -172,7 +173,8 @@ private fun HeroBlock(digest: Digest?, modifier: Modifier, onClick: () -> Unit) 
             .clickable(enabled = digest != null, onClick = onClick)
             .padding(16.dp)
     ) {
-        Icon(Icons.Filled.WbSunny, null, tint = a.heroInk, modifier = Modifier.size(22.dp))
+        val heroIcon = digest?.let { slotIcon(DigestSlot.valueOf(it.slot)) } ?: Icons.Filled.WbSunny
+        Icon(heroIcon, null, tint = a.heroInk, modifier = Modifier.size(22.dp))
         Text(
             if (digest != null) "READY" else "SOON",
             style = PillLabel, color = a.heroTag,
