@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import kotlinx.serialization.Serializable
 
 /**
  * Every captured notification, immutable. EDD §3.
@@ -13,6 +14,7 @@ import androidx.room.PrimaryKey
  * column through Room). UNIQUE(content_hash, window_bucket) kills exact dupes at insert.
  * [windowId] is assigned at digest time and stays null until the window's digest runs.
  */
+@Serializable
 @Entity(
     tableName = "raw_notifications",
     indices = [
@@ -43,6 +45,7 @@ data class RawNotification(
 )
 
 /** One row per digest run, including empty ones. id = window_id "YYYY-MM-DD-{M|E|N}". */
+@Serializable
 @Entity(
     tableName = "digests",
     indices = [Index(value = ["created_at"])]
@@ -60,6 +63,7 @@ data class Digest(
 )
 
 /** One row per merged story cluster inside a digest. */
+@Serializable
 @Entity(
     tableName = "digest_items",
     foreignKeys = [
@@ -82,6 +86,7 @@ data class DigestItem(
 )
 
 /** Membership: which raw notifications fed which cluster. */
+@Serializable
 @Entity(
     tableName = "item_sources",
     primaryKeys = ["item_id", "raw_id"],
@@ -107,6 +112,7 @@ data class ItemSource(
 )
 
 /** Canonical entities/topics. v1 read path, v0 write path. */
+@Serializable
 @Entity(
     tableName = "entities",
     indices = [Index(value = ["normalized"], unique = true)]
@@ -119,6 +125,7 @@ data class TrackedEntity(
     @androidx.room.ColumnInfo(name = "last_seen") val lastSeen: Long
 )
 
+@Serializable
 @Entity(
     tableName = "item_entities",
     primaryKeys = ["item_id", "entity_id"],

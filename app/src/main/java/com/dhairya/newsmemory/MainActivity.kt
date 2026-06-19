@@ -2,9 +2,12 @@ package com.dhairya.newsmemory
 
 import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +52,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.dhairya.newsmemory.data.ArchiveExporter
 import com.dhairya.newsmemory.pipeline.DigestNotifier
 import com.dhairya.newsmemory.pipeline.DigestSlot
 import com.dhairya.newsmemory.pipeline.DigestTimes
@@ -66,7 +70,9 @@ import com.dhairya.newsmemory.ui.theme.NewsMemoryTheme
 import com.dhairya.newsmemory.ui.theme.ThemeMode
 import com.dhairya.newsmemory.ui.theme.body
 import com.dhairya.newsmemory.util.Permissions
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -109,6 +115,22 @@ private fun NewsMemoryApp(container: AppContainer, pendingDigestId: String?, onC
     val nav = rememberNavController()
     val scope = rememberCoroutineScope()
     val a = LocalAlmanac.current
+
+    // JSON export (EDD §3): SAF "create document" picker → write the whole archive to it.
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) scope.launch {
+            val ok = runCatching {
+                val payload = ArchiveExporter.toJson(container.database)
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { it.write(payload.toByteArray()) }
+                        ?: error("could not open $uri")
+                }
+            }.isSuccess
+            Toast.makeText(context, if (ok) "Archive exported" else "Export failed", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val onboardingDone by container.settingsStore.onboardingDone.collectAsState(initial = null)
     val batteryAck by container.settingsStore.batteryAcknowledged.collectAsState(initial = false)
@@ -219,7 +241,7 @@ private fun NewsMemoryApp(container: AppContainer, pendingDigestId: String?, onC
                     allowlistSize = allowlist.size,
                     health = HealthStatus(minsAgo(lastAlive), minsAgo(lastCaptured), batteryOk),
                     onOpenAllowlist = { nav.navigate(Routes.ALLOWLIST) },
-                    onExport = { /* JSON export wired in Phase 5 */ }
+                    onExport = { exportLauncher.launch(ArchiveExporter.suggestedFileName()) }
                 )
             }
             composable(
