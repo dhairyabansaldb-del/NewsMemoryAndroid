@@ -14,7 +14,9 @@ import com.dhairya.newsmemory.pipeline.HeuristicClusterer
  */
 class GroqClusterEngine(
     private val client: GroqClient,
-    private val model: String = CLUSTERING_MODEL
+    private val model: String = CLUSTERING_MODEL,
+    // Injected so unit tests stay pure (no android.util.Log); AppContainer wires the real one.
+    private val log: (String) -> Unit = {}
 ) {
 
     suspend fun cluster(stories: List<Deduper.MergedStory>): ClusterResult {
@@ -25,8 +27,11 @@ class GroqClusterEngine(
                 system = ClusteringPrompt.SYSTEM,
                 user = ClusteringPrompt.buildUser(stories)
             )
-            ClusterResponseParser.parse(content, stories)
+            ClusterResponseParser.parse(content, stories).also {
+                log("LLM ok: ${stories.size} stories → ${it.clusters.size} clusters via $model")
+            }
         } catch (e: Exception) {
+            log("LLM failed (${e.javaClass.simpleName}: ${e.message}) → heuristic fallback")
             HeuristicClusterer.cluster(stories)
         }
     }

@@ -53,6 +53,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.dhairya.newsmemory.data.ArchiveExporter
+import com.dhairya.newsmemory.pipeline.DigestAlarmScheduler
 import com.dhairya.newsmemory.pipeline.DigestNotifier
 import com.dhairya.newsmemory.pipeline.DigestSlot
 import com.dhairya.newsmemory.pipeline.DigestTimes
@@ -237,7 +238,15 @@ private fun NewsMemoryApp(container: AppContainer, pendingDigestId: String?, onC
                     themeMode = ThemeMode.from(themeMode),
                     onSetTheme = { scope.launch { container.settingsStore.setThemeMode(it.name) } },
                     times = times,
-                    onSetTimes = { scope.launch { container.settingsStore.setDigestTimes(it) } },
+                    onSetTimes = {
+                        scope.launch {
+                            container.settingsStore.setDigestTimes(it)
+                            // Re-arm the next-slot alarm — without this a time change only takes
+                            // effect after the next digest/catch-up run (the stale alarm still fires
+                            // at the old time).
+                            DigestAlarmScheduler.scheduleNext(context)
+                        }
+                    },
                     allowlistSize = allowlist.size,
                     health = HealthStatus(minsAgo(lastAlive), minsAgo(lastCaptured), batteryOk),
                     onOpenAllowlist = { nav.navigate(Routes.ALLOWLIST) },

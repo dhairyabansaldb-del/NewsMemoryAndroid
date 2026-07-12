@@ -31,13 +31,13 @@ object HeuristicClusterer {
 
     fun cluster(stories: List<Deduper.MergedStory>): ClusterResult {
         val clusters = stories.map { story ->
-            TopicCluster(topicLabel = topTfLabel(story), stories = listOf(story))
+            TopicCluster(topicLabel = labelFor(story), stories = listOf(story))
         }
         return ClusterResult(clusters, ClusterResult.MODE_HEURISTIC)
     }
 
     /** Highest-frequency token within the story group; ties broken by length (longer = more specific). */
-    private fun topTfLabel(story: Deduper.MergedStory): String {
+    fun labelFor(story: Deduper.MergedStory): String {
         val counts = mutableMapOf<String, Int>()
         for (member in story.members) {
             for (token in Normalizer.titleTokens(member.title ?: member.body)) {

@@ -1,6 +1,7 @@
 package com.dhairya.newsmemory
 
 import android.content.Context
+import android.util.Log
 import com.dhairya.newsmemory.data.NotificationRepository
 import com.dhairya.newsmemory.data.SettingsStore
 import com.dhairya.newsmemory.data.db.ArchiveDatabase
@@ -32,7 +33,9 @@ class AppContainer(private val context: Context) {
 
     /** LLM clustering with built-in heuristic fallback, or pure heuristic when no key. */
     private val clusterEngine: suspend (List<Deduper.MergedStory>) -> ClusterResult by lazy {
-        groqClient?.let { GroqClusterEngine(it)::cluster } ?: { HeuristicClusterer.cluster(it) }
+        groqClient?.let { client ->
+            GroqClusterEngine(client, log = { msg -> Log.d("GroqCluster", msg) })::cluster
+        } ?: { HeuristicClusterer.cluster(it) }
     }
 
     val digestPipeline: DigestPipeline by lazy {
