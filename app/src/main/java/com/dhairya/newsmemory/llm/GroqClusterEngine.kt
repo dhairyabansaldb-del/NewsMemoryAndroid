@@ -8,9 +8,10 @@ import com.dhairya.newsmemory.pipeline.HeuristicClusterer
 /**
  * Stage-3 clustering backed by Groq (EDD §5.2), with the always-available heuristic as a
  * fallback. Plugs into [com.dhairya.newsmemory.pipeline.DigestPipeline] as its
- * `clusterEngine`. ANY failure — network, HTTP, malformed JSON, or a response that doesn't
- * partition the input — degrades to [HeuristicClusterer] and the resulting digest is
- * tagged HEURISTIC, so degradation is visible and never silent.
+ * `clusterEngine`. Minor id bookkeeping mistakes in the response are repaired by
+ * [ClusterResponseParser]; ANY real failure — network, HTTP, malformed JSON, or a model
+ * that placed under half the headlines — degrades to [HeuristicClusterer] and the
+ * resulting digest is tagged HEURISTIC, so degradation is visible and never silent.
  */
 class GroqClusterEngine(
     private val client: GroqClient,

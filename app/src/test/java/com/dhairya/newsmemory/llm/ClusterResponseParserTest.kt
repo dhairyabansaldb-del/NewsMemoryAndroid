@@ -5,6 +5,7 @@ import com.dhairya.newsmemory.pipeline.ClusterResult
 import com.dhairya.newsmemory.pipeline.Deduper
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ClusterResponseParserTest {
@@ -19,6 +20,13 @@ class ClusterResponseParserTest {
     }
 
     private val three = listOf(story("Sensex falls on FII selling"), story("Apple unveils MacBook"), story("FII selling drags Sensex"))
+
+    /** Every input story must land in exactly one output cluster, whatever the repairs. */
+    private fun assertCoversAll(result: ClusterResult, stories: List<Deduper.MergedStory>) {
+        val placed = result.clusters.flatMap { it.stories }
+        assertEquals(stories.size, placed.size)
+        assertEquals(stories.toSet(), placed.toSet())
+    }
 
     @Test
     fun `valid partition maps ids and orders representative first`() {
@@ -39,6 +47,7 @@ class ClusterResponseParserTest {
         // representative id 3 → that story must be first (DigestPipeline reads stories.first()).
         assertEquals("FII selling drags Sensex", markets.stories.first().representative.title)
         assertEquals(2, markets.stories.size)
+        assertCoversAll(result, three)
     }
 
     @Test
@@ -49,32 +58,81 @@ class ClusterResponseParserTest {
     }
 
     @Test
-    fun `missing id fails the partition check`() {
+    fun `missing id is repaired into a singleton cluster`() {
+        // Model forgot headline 3 entirely.
         val content = """{"clusters":[{"topic":"Markets","headline_ids":[1,2],"representative":1,"entities":[]}]}"""
-        assertThrows(Exception::class.java) { ClusterResponseParser.parse(content, three) }
+
+        val result = ClusterResponseParser.parse(content, three)
+
+        assertEquals(ClusterResult.MODE_LLM, result.mode)
+        assertEquals(2, result.clusters.size)
+        val orphan = result.clusters[1]
+        assertEquals(1, orphan.stories.size)
+        assertEquals("FII selling drags Sensex", orphan.stories[0].representative.title)
+        assertTrue(orphan.topicLabel.isNotBlank())   // heuristic label, never empty
+        assertCoversAll(result, three)
     }
 
     @Test
-    fun `duplicate id is rejected`() {
+    fun `duplicate id is repaired - first cluster wins`() {
         val content = """{"clusters":[{"topic":"A","headline_ids":[1,2],"representative":1,"entities":[]},{"topic":"B","headline_ids":[2,3],"representative":3,"entities":[]}]}"""
-        assertThrows(Exception::class.java) { ClusterResponseParser.parse(content, three) }
+
+        val result = ClusterResponseParser.parse(content, three)
+
+        assertEquals(2, result.clusters.size)
+        assertEquals(2, result.clusters[0].stories.size)          // A keeps 1 and 2
+        assertEquals(1, result.clusters[1].stories.size)          // B keeps only 3
+        assertEquals("FII selling drags Sensex", result.clusters[1].stories[0].representative.title)
+        assertCoversAll(result, three)
     }
 
     @Test
-    fun `out of range id is rejected`() {
+    fun `out of range id is dropped and the story it displaced becomes a singleton`() {
         val content = """{"clusters":[{"topic":"A","headline_ids":[1,2,4],"representative":1,"entities":[]}]}"""
-        assertThrows(Exception::class.java) { ClusterResponseParser.parse(content, three) }
+
+        val result = ClusterResponseParser.parse(content, three)
+
+        assertEquals(2, result.clusters.size)
+        assertEquals(2, result.clusters[0].stories.size)          // 4 dropped, 1+2 kept
+        assertEquals(1, result.clusters[1].stories.size)          // 3 orphaned → singleton
+        assertCoversAll(result, three)
     }
 
     @Test
-    fun `representative outside its cluster is rejected`() {
+    fun `representative outside its cluster is repaired to the first id`() {
         val content = """{"clusters":[{"topic":"A","headline_ids":[1,2,3],"representative":9,"entities":[]}]}"""
-        assertThrows(Exception::class.java) { ClusterResponseParser.parse(content, three) }
+
+        val result = ClusterResponseParser.parse(content, three)
+
+        assertEquals(1, result.clusters.size)
+        assertEquals("Sensex falls on FII selling", result.clusters[0].stories.first().representative.title)
+        assertCoversAll(result, three)
     }
 
     @Test
-    fun `blank topic is rejected`() {
+    fun `blank topic gets a heuristic label`() {
         val content = """{"clusters":[{"topic":"","headline_ids":[1,2,3],"representative":1,"entities":[]}]}"""
+
+        val result = ClusterResponseParser.parse(content, three)
+
+        assertTrue(result.clusters[0].topicLabel.isNotBlank())
+    }
+
+    @Test
+    fun `a cluster left empty after repairs is dropped`() {
+        // Second cluster's only ids are a duplicate and an out-of-range id.
+        val content = """{"clusters":[{"topic":"A","headline_ids":[1,2,3],"representative":1,"entities":[]},{"topic":"B","headline_ids":[1,7],"representative":1,"entities":[]}]}"""
+
+        val result = ClusterResponseParser.parse(content, three)
+
+        assertEquals(1, result.clusters.size)
+        assertCoversAll(result, three)
+    }
+
+    @Test
+    fun `coverage under half is beyond repair`() {
+        // Model placed only 1 of 3 headlines — that's failure, not fumbled bookkeeping.
+        val content = """{"clusters":[{"topic":"A","headline_ids":[1],"representative":1,"entities":[]}]}"""
         assertThrows(Exception::class.java) { ClusterResponseParser.parse(content, three) }
     }
 

@@ -70,10 +70,21 @@ class GroqClusterEngineTest {
     }
 
     @Test
-    fun `non-partitioning response falls back to heuristic`() = runTest {
+    fun `response with a dropped id is repaired and stays LLM`() = runTest {
+        // Model forgot story 3 — the parser gives it a singleton cluster instead of rejecting.
         val content = """{"clusters":[{"topic":"Markets","headline_ids":[1,2],"representative":1,"entities":[]}]}"""
         val result = engine(content).cluster(stories)
+        assertEquals(ClusterResult.MODE_LLM, result.mode)
+        assertEquals(2, result.clusters.size)
+        assertEquals(stories.size, result.clusters.sumOf { it.stories.size })
+    }
+
+    @Test
+    fun `response covering under half the stories falls back to heuristic`() = runTest {
+        val content = """{"clusters":[{"topic":"Markets","headline_ids":[1],"representative":1,"entities":[]}]}"""
+        val result = engine(content).cluster(stories)
         assertEquals(ClusterResult.MODE_HEURISTIC, result.mode)
+        assertEquals(stories.size, result.clusters.size)
     }
 
     @Test
