@@ -130,4 +130,41 @@ class DigestPipelineTest {
         val entities = db.entityDao().entitiesFor(items[0].id)
         assertEquals(setOf("fii selling", "sensex"), entities.map { it.normalized }.toSet())
     }
+
+    @Test
+    fun `synthesized cluster headline is used over the raw representative`() = runTest {
+        seedEveningWindow()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val settings = SettingsStore(context)
+        val llmLike = DigestPipeline(db, settings, clusterEngine = { stories ->
+            ClusterResult(
+                listOf(TopicCluster("Markets", stories, headline = "Sensex slides as FII selling continues")),
+                ClusterResult.MODE_LLM
+            )
+        }, zone = { zone })
+
+        llmLike.runForWindow("2026-06-10-E")
+
+        val items = db.digestDao().itemsFor("2026-06-10-E")
+        assertEquals("Sensex slides as FII selling continues", items[0].headline)
+    }
+
+    @Test
+    fun `blank synthesized headline falls back to the representative story`() = runTest {
+        seedEveningWindow()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val settings = SettingsStore(context)
+        val llmLike = DigestPipeline(db, settings, clusterEngine = { stories ->
+            ClusterResult(
+                listOf(TopicCluster("Markets", stories, headline = "   ")),   // blank, not null
+                ClusterResult.MODE_LLM
+            )
+        }, zone = { zone })
+
+        llmLike.runForWindow("2026-06-10-E")
+
+        val items = db.digestDao().itemsFor("2026-06-10-E")
+        val rawTitles = db.rawNotificationDao().all().mapNotNull { it.title }.toSet()
+        assertTrue(items[0].headline in rawTitles)
+    }
 }

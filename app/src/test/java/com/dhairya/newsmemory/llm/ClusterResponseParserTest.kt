@@ -29,10 +29,10 @@ class ClusterResponseParserTest {
     }
 
     @Test
-    fun `valid partition maps ids and orders representative first`() {
+    fun `valid partition maps ids, headline, and orders representative first`() {
         val content = """
             {"clusters":[
-              {"topic":"Markets","headline_ids":[1,3],"representative":3,"entities":["Sensex","FII selling"]},
+              {"topic":"Markets","headline":"Sensex slides on continued FII selling","headline_ids":[1,3],"representative":3,"entities":["Sensex","FII selling"]},
               {"topic":"Tech","headline_ids":[2],"representative":2,"entities":[]}
             ]}
         """.trimIndent()
@@ -43,11 +43,53 @@ class ClusterResponseParserTest {
         assertEquals(2, result.clusters.size)
         val markets = result.clusters[0]
         assertEquals("Markets", markets.topicLabel)
+        assertEquals("Sensex slides on continued FII selling", markets.headline)
         assertEquals(listOf("Sensex", "FII selling"), markets.entities)
         // representative id 3 → that story must be first (DigestPipeline reads stories.first()).
         assertEquals("FII selling drags Sensex", markets.stories.first().representative.title)
         assertEquals(2, markets.stories.size)
         assertCoversAll(result, three)
+    }
+
+    @Test
+    fun `missing headline field leaves the cluster headline null`() {
+        val content = """{"clusters":[{"topic":"Markets","headline_ids":[1,2,3],"representative":1,"entities":[]}]}"""
+        val result = ClusterResponseParser.parse(content, three)
+        assertEquals(null, result.clusters[0].headline)
+    }
+
+    @Test
+    fun `blank headline field is treated as missing`() {
+        val content = """{"clusters":[{"topic":"Markets","headline":"  ","headline_ids":[1,2,3],"representative":1,"entities":[]}]}"""
+        val result = ClusterResponseParser.parse(content, three)
+        assertEquals(null, result.clusters[0].headline)
+    }
+
+    @Test
+    fun `concatenated id is split into the two ids it came from`() {
+        // gpt-oss-120b's most common mistake: ids 1 and 3 emitted as the single value 13.
+        val content = """{"clusters":[{"topic":"Markets","headline_ids":[13],"representative":13,"entities":[]},{"topic":"Tech","headline_ids":[2],"representative":2,"entities":[]}]}"""
+
+        val result = ClusterResponseParser.parse(content, three)
+
+        assertEquals(ClusterResult.MODE_LLM, result.mode)
+        assertEquals(2, result.clusters.size)
+        assertEquals(2, result.clusters[0].stories.size)   // 13 -> 1 and 3
+        assertCoversAll(result, three)
+    }
+
+    @Test
+    fun `an out-of-range id with no valid split is just dropped`() {
+        // n=3: id 99 has no split whose halves are both in range (9 is out of range
+        // either way), so it's out-of-range noise, not a dropped comma. ids 1 and 2 are
+        // real so the model still clears the coverage floor.
+        val content = """{"clusters":[{"topic":"Markets","headline_ids":[1,2,99],"representative":1,"entities":[]}]}"""
+
+        val result = ClusterResponseParser.parse(content, three)
+
+        assertEquals(ClusterResult.MODE_LLM, result.mode)
+        assertEquals(2, result.clusters[0].stories.size)   // 1 and 2 kept; 99 dropped
+        assertCoversAll(result, three)   // story 3 lands as an orphan singleton
     }
 
     @Test

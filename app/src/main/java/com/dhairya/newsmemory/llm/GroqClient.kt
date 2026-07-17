@@ -34,10 +34,18 @@ class GroqClient(
 ) {
 
     /** @return the assistant message content (a JSON string when response_format=json_object). */
-    suspend fun complete(model: String, system: String, user: String): String {
+    suspend fun complete(
+        model: String,
+        system: String,
+        user: String,
+        maxTokens: Int? = null,
+        reasoningEffort: String? = null
+    ): String {
         val request = ChatRequest(
             model = model,
-            messages = listOf(ChatMessage("system", system), ChatMessage("user", user))
+            messages = listOf(ChatMessage("system", system), ChatMessage("user", user)),
+            reasoningEffort = reasoningEffort,
+            maxCompletionTokens = maxTokens
         )
 
         var attempt = 0
@@ -59,7 +67,9 @@ class GroqClient(
                     return response.body<ChatResponse>().choices.firstOrNull()?.message?.content
                         ?: throw GroqException("Groq response had no choices")
 
-                (code == 429 || code in 500..599) && attempt < MAX_RETRIES -> {
+                // 400 included: the free tier intermittently 400s an otherwise-valid
+                // request under load (observed live during the 30-day eval replay).
+                (code == 400 || code == 429 || code in 500..599) && attempt < MAX_RETRIES -> {
                     attempt++; delay(backoffMillis(attempt))
                 }
 

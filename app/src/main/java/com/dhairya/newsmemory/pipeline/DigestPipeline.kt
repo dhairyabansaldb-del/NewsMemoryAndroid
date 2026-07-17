@@ -74,7 +74,8 @@ class DigestPipeline(
                     DigestItem(
                         digestId = windowId,
                         topicLabel = cluster.topicLabel,
-                        headline = representative.title ?: representative.body ?: "",
+                        headline = cluster.headline?.takeIf { it.isNotBlank() }
+                            ?: (representative.title ?: representative.body ?: ""),
                         sourceCount = cluster.stories.flatMap { it.members }
                             .map { it.publisher ?: it.packageName }.distinct().size,
                         position = position

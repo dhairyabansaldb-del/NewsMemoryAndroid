@@ -9,6 +9,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -115,5 +116,86 @@ class GroqClusterEngineTest {
         assertEquals(ClusterResult.MODE_HEURISTIC, result.mode)
         assertTrue(result.clusters.isEmpty())
         assertEquals(false, called)
+    }
+
+    @Test
+    fun `malformed response gets one reask that succeeds`() = runTest {
+        var calls = 0
+        val engine = MockEngine {
+            calls++
+            val body = if (calls == 1) "not valid json at all"
+            else """{"clusters":[{"topic":"Markets","headline_ids":[1,2,3],"representative":1,"entities":[]}]}"""
+            respond(
+                Json.encodeToString(ChatResponse(listOf(ChatChoice(ChatMessage("assistant", body))))),
+                HttpStatusCode.OK, jsonHeaders
+            )
+        }
+        val result = GroqClusterEngine(
+            GroqClient("k", GroqClient.defaultHttpClient(engine), "https://groq.test/")
+        ).cluster(stories)
+
+        assertEquals(2, calls)
+        assertEquals(ClusterResult.MODE_LLM, result.mode)
+    }
+
+    @Test
+    fun `malformed response on both attempts falls back to heuristic after exactly two calls`() = runTest {
+        var calls = 0
+        val engine = MockEngine {
+            calls++
+            respond(
+                Json.encodeToString(ChatResponse(listOf(ChatChoice(ChatMessage("assistant", "still not json"))))),
+                HttpStatusCode.OK, jsonHeaders
+            )
+        }
+        val result = GroqClusterEngine(
+            GroqClient("k", GroqClient.defaultHttpClient(engine), "https://groq.test/")
+        ).cluster(stories)
+
+        assertEquals(2, calls)
+        assertEquals(ClusterResult.MODE_HEURISTIC, result.mode)
+    }
+
+    @Test
+    fun `network failure falls back without an extra reask call`() = runTest {
+        var calls = 0
+        val engine = MockEngine { calls++; respond("down", HttpStatusCode.InternalServerError) }
+        val result = GroqClusterEngine(
+            GroqClient("k", GroqClient.defaultHttpClient(engine), "https://groq.test/")
+        ).cluster(stories)
+
+        // GroqClient's own internal retry (429/5xx) already fired 1 + MAX_RETRIES calls;
+        // the engine must not additionally re-ask on top of a network/HTTP failure.
+        assertEquals(1 + GroqClient.MAX_RETRIES, calls)
+        assertEquals(ClusterResult.MODE_HEURISTIC, result.mode)
+    }
+
+    @Test
+    fun `synthesized headline flows through to the cluster`() = runTest {
+        val content = """{"clusters":[{"topic":"Markets","headline":"Sensex slides as FII selling continues","headline_ids":[1,3],"representative":3,"entities":[]}]}"""
+        val result = engine(content).cluster(stories)
+        assertEquals("Sensex slides as FII selling continues", result.clusters[0].headline)
+    }
+
+    @Test
+    fun `request uses the configured model and reasoning effort`() = runTest {
+        var seenModel: String? = null
+        var seenEffort: String? = null
+        val engine = MockEngine { req ->
+            val bytes = (req.body as io.ktor.http.content.OutgoingContent.ByteArrayContent).bytes()
+            val body = Json.decodeFromString<ChatRequest>(bytes.decodeToString())
+            seenModel = body.model
+            seenEffort = body.reasoningEffort
+            respond(
+                Json.encodeToString(ChatResponse(listOf(ChatChoice(ChatMessage("assistant", """{"clusters":[{"topic":"Markets","headline_ids":[1,2,3],"representative":1,"entities":[]}]}"""))))),
+                HttpStatusCode.OK, jsonHeaders
+            )
+        }
+        GroqClusterEngine(
+            GroqClient("k", GroqClient.defaultHttpClient(engine), "https://groq.test/")
+        ).cluster(stories)
+
+        assertEquals(GroqClusterEngine.CLUSTERING_MODEL, seenModel)
+        assertEquals(GroqClusterEngine.REASONING_EFFORT, seenEffort)
     }
 }

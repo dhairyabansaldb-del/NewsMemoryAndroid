@@ -6,11 +6,19 @@ import java.util.Locale
 /**
  * A topic cluster ready for assembly. In heuristic mode entities are empty
  * (backfilled later, EDD §7.3); the LLM path (Phase 5) fills them.
+ *
+ * [headline] is a model-synthesized headline covering the whole cluster (clustering-v2,
+ * 2026-07-17) — null in heuristic mode, or when the LLM didn't supply one, in which case
+ * assembly (DigestPipeline) falls back to the representative story's own title/body.
+ * Before this field existed the digest always showed one input's raw headline verbatim,
+ * which silently hid the other side of a 2-source merge (e.g. only the SC-quote half of
+ * a Samay Raina story, never the follow-up) — the synthesized headline covers the event.
  */
 data class TopicCluster(
     val topicLabel: String,
     val stories: List<Deduper.MergedStory>,
-    val entities: List<String> = emptyList()
+    val entities: List<String> = emptyList(),
+    val headline: String? = null
 )
 
 /** Result of stage 3: clusters + which pipeline produced them. */

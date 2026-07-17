@@ -26,9 +26,25 @@ object Deduper {
         return intersection.toDouble() / union
     }
 
+    /**
+     * Dedup tokens for one row. When the title alone yields too few tokens to be
+     * meaningful (an account-name title like "Inc42" from an X-style capture, or a
+     * one-word teaser), mix in the body — otherwise every notification sharing that
+     * degenerate title has Jaccard 1.0 with every other and stage 2 force-merges
+     * unrelated stories into one blob (found in a 30-day replay: ten distinct "Inc42"
+     * posts collapsed into a single merged story before Groq ever saw them).
+     */
+    private fun dedupTokens(row: RawNotification): Set<String> {
+        val titleTokens = Normalizer.titleTokens(row.title ?: row.body)
+        if (titleTokens.size <= 2 && !row.body.isNullOrBlank()) {
+            return titleTokens + Normalizer.titleTokens(row.body)
+        }
+        return titleTokens
+    }
+
     fun merge(rows: List<RawNotification>): List<MergedStory> {
         if (rows.isEmpty()) return emptyList()
-        val tokens = rows.map { Normalizer.titleTokens(it.title ?: it.body) }
+        val tokens = rows.map { dedupTokens(it) }
 
         val parent = IntArray(rows.size) { it }
         fun find(x: Int): Int {

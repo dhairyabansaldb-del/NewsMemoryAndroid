@@ -28,7 +28,7 @@ import re
 import time
 import urllib.request
 import urllib.error
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -235,7 +235,7 @@ def groq_call(key, model, system, user, max_tokens=None, max_retries=4, reasonin
             # 400 included: Groq free tier intermittently 400s valid requests.
             if e.code in (400, 429, 500, 502, 503) and attempt < max_retries:
                 wait = int(e.headers.get("retry-after") or 0) or min(60, 5 * 2 ** attempt)
-                time.sleep(wait)
+                time.sleep(min(wait, 120))  # clamp: Groq can send multi-hour retry-after
                 attempt += 1
                 continue
             raise
@@ -340,7 +340,46 @@ def parse_and_repair(content, stories, expect_headline):
 # Free-tier TPM for openai/gpt-oss-120b is 8000 and Groq pre-counts
 # input + max_completion_tokens against it, so the completion budget must be
 # derived per request, and calls must be paced to stay under the per-minute cap.
-TPM_BUDGET = 7600
+# Budgeted well under the hard cap (not 7600/8000) because est_tokens() is a
+# chars/4 approximation and actual usage can run over the pre-flight estimate.
+TPM_BUDGET = 6500
+TPM_HARD_CAP = 8000
+
+
+class RollingTokenLimiter:
+    """Real sliding-60s-window accounting, not just "pace off the last call".
+
+    Pacing on the previous call's token count alone is not enough: several
+    medium calls fired ~20-30s apart can still exceed the per-minute cap in
+    sum even though each individual gap looked adequate (observed live
+    2026-07-17 — cascading 429s persisted after a naive per-call pause fix).
+    This tracks every recorded spend with its timestamp and blocks until an
+    upcoming request's estimated cost actually fits under the cap within the
+    trailing 60s.
+    """
+
+    def __init__(self, budget=TPM_HARD_CAP, window_s=62):
+        self.budget = budget
+        self.window_s = window_s
+        self.events = deque()  # (timestamp, tokens)
+
+    def _prune(self, now):
+        while self.events and now - self.events[0][0] > self.window_s:
+            self.events.popleft()
+
+    def wait_for(self, est_tokens):
+        while True:
+            now = time.time()
+            self._prune(now)
+            spent = sum(t for _, t in self.events)
+            if spent + est_tokens <= self.budget:
+                return
+            # Sleep until the oldest event ages out of the window.
+            sleep_s = self.window_s - (now - self.events[0][0]) + 0.5
+            time.sleep(max(sleep_s, 1))
+
+    def record(self, tokens):
+        self.events.append((time.time(), tokens))
 
 CONFIGS = {
     "A": dict(model="llama-3.1-8b-instant", prompt=PROMPT_V1, with_body=False,
@@ -352,7 +391,7 @@ CONFIGS = {
 }
 
 
-def run_window(key, cfg, bucket, rows):
+def run_window(key, cfg, bucket, rows, limiter=None):
     stories = dedup_merge(rows, cfg["enrich_degenerate"])
     body_chars = 160
     user = build_user(stories, cfg["with_body"], body_chars)
@@ -376,8 +415,15 @@ def run_window(key, cfg, bucket, rows):
     last_err = None
     for attempt in range(attempts):
         try:
+            if limiter:
+                # Reserve worst case (input + full completion budget) BEFORE
+                # sending, so we never fire a request the rolling window can't
+                # afford — gating here, not just reacting to 429s after the fact.
+                limiter.wait_for(result["est_input"] + (max_tokens or 0))
             content, finish, total = groq_call(key, cfg["model"], cfg["prompt"], user,
                                                max_tokens, reasoning_effort=cfg["reasoning_effort"])
+            if limiter:
+                limiter.record(total)
             result["finish_reason"] = finish
             result["tokens"] = total
             result["raw_response"] = content[:6000]
@@ -406,7 +452,13 @@ def run_window(key, cfg, bucket, rows):
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
             break
-    result.update(mode="FALLBACK", error=str(last_err)[:200])
+    # Pacing needs a token estimate even on failure, or the next window inherits
+    # only the bare --delay and re-fires before the TPM bucket recovers,
+    # cascading into a run of fallbacks that reflect harness pacing, not the
+    # pipeline (observed live 2026-07-17: 4 straight 429-fallbacks after one
+    # big window). Estimate from the input tokens we tried to send.
+    result.update(mode="FALLBACK", error=str(last_err)[:200],
+                  tokens=result.get("est_input", 0) + 500)
     return result
 
 
@@ -419,6 +471,7 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="only first N windows (0 = all)")
     ap.add_argument("--only", default=None, help="run a single window bucket, e.g. 2026-06-18-N")
     ap.add_argument("--effort", default=None, help="override reasoning_effort for this run")
+    ap.add_argument("--skip", type=int, default=0, help="skip first N buckets and append to --out")
     ap.add_argument("--delay", type=float, default=1.0, help="seconds between calls")
     args = ap.parse_args()
 
@@ -435,25 +488,27 @@ def main():
     buckets = sorted(windows)
     if args.only:
         buckets = [b for b in buckets if b == args.only]
+    if args.skip:
+        buckets = buckets[args.skip:]
     if args.limit:
         buckets = buckets[: args.limit]
 
     cfg = dict(CONFIGS[args.config])
     if args.effort:
         cfg["reasoning_effort"] = args.effort
-    out = open(args.out, "w", encoding="utf-8")
+    # Real rolling-60s-window accounting (see RollingTokenLimiter) gates each
+    # call before it's sent, so pacing no longer depends on guessing a fixed
+    # per-call sleep from the previous window's usage.
+    limiter = RollingTokenLimiter() if cfg["tpm_paced"] else None
+    out = open(args.out, "a" if args.skip else "w", encoding="utf-8")
     for i, bucket in enumerate(buckets):
-        res = run_window(key, cfg, bucket, windows[bucket])
+        res = run_window(key, cfg, bucket, windows[bucket], limiter=limiter)
         out.write(json.dumps(res, ensure_ascii=False) + "\n")
         out.flush()
         print(f"[{i + 1}/{len(buckets)}] {bucket}: {res['mode']} "
               f"stories={res['stories']} clusters={res.get('clusters', '-')} "
               f"mega={res.get('mega', '-')} tok={res.get('tokens', '-')}", flush=True)
-        # TPM pacing: keep the rolling per-minute token spend under the cap.
-        pause = args.delay
-        if cfg["tpm_paced"] and res.get("tokens"):
-            pause = max(pause, 60.0 * res["tokens"] / TPM_BUDGET)
-        time.sleep(pause)
+        time.sleep(args.delay)
     out.close()
 
 

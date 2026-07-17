@@ -9,12 +9,12 @@ import org.junit.Test
 class DeduperTest {
 
     private var nextId = 1L
-    private fun raw(title: String, pkg: String = "com.news.a") = RawNotification(
+    private fun raw(title: String, pkg: String = "com.news.a", body: String? = null) = RawNotification(
         id = nextId++,
         packageName = pkg,
         title = title,
-        body = null,
-        contentHash = Normalizer.contentHash(title, null),
+        body = body,
+        contentHash = Normalizer.contentHash(title, body),
         postedAt = 0,
         capturedAt = 0,
         windowBucket = "2026-06-10-E"
@@ -116,6 +116,38 @@ class DeduperTest {
         )
         val merged = Deduper.merge(rows)
         assertEquals(3, merged[0].sourceCount)
+    }
+
+    /**
+     * Found in a 30-day live replay (2026-07-17): X/Twitter-style captures whose title
+     * is just the account handle ("Inc42") all have Jaccard 1.0 with each other on
+     * title alone, so ten distinct posts collapsed into one merged story before Groq
+     * ever saw them. Body text must break the tie for degenerate (<=2 token) titles.
+     */
+    @Test
+    fun `identical degenerate titles do not force-merge when bodies differ`() {
+        val rows = listOf(
+            raw("Inc42", body = "udaan lines up a \$160M financing round to strengthen its balance sheet"),
+            raw("Inc42", pkg = "com.news.b", body = "Shark Tank-fame Medial shuts down after failing to raise fresh funds"),
+            raw("Inc42", pkg = "com.news.c", body = "Zomato is testing an AI voice bot for food ordering")
+        )
+        assertEquals(3, Deduper.merge(rows).size)
+    }
+
+    @Test
+    fun `identical degenerate titles with near-identical bodies still merge`() {
+        val rows = listOf(
+            raw("Inc42", body = "Healthtech startup Mykare raises \$3.2 million to expand hospital network"),
+            raw("Inc42", pkg = "com.news.b", body = "Healthtech startup Mykare raises \$3.2 million to expand its hospital network")
+        )
+        assertEquals(1, Deduper.merge(rows).size)
+    }
+
+    @Test
+    fun `a degenerate title with no body is left as its own weak signal`() {
+        // No body to enrich with — falls back to the (near-empty) title tokens, same as before.
+        val rows = listOf(raw("Inc42"), raw("Inc42", pkg = "com.news.b"))
+        assertEquals(1, Deduper.merge(rows).size)
     }
 
     @Test

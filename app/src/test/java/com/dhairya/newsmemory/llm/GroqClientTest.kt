@@ -6,6 +6,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -94,5 +95,52 @@ class GroqClientTest {
     fun `empty choices throws`() = runTest {
         val engine = MockEngine { respond("""{"choices":[]}""", HttpStatusCode.OK, jsonHeaders) }
         expectGroqError { client(engine).complete("m", "s", "u") }
+    }
+
+    @Test
+    fun `retries on 400 then succeeds`() = runTest {
+        // The free tier intermittently 400s an otherwise-valid request under load
+        // (observed live during the 30-day eval replay) — must be retryable.
+        var calls = 0
+        val engine = MockEngine {
+            calls++
+            if (calls == 1) respond("bad request", HttpStatusCode.BadRequest)
+            else respond(envelope("""{"ok":true}"""), HttpStatusCode.OK, jsonHeaders)
+        }
+
+        val out = client(engine).complete("m", "s", "u")
+
+        assertEquals(2, calls)
+        assertEquals("""{"ok":true}""", out)
+    }
+
+    @Test
+    fun `maxTokens and reasoningEffort are sent when provided`() = runTest {
+        var seen: ChatRequest? = null
+        val engine = MockEngine { req ->
+            val bytes = (req.body as io.ktor.http.content.OutgoingContent.ByteArrayContent).bytes()
+            seen = Json.decodeFromString<ChatRequest>(bytes.decodeToString())
+            respond(envelope("{}"), HttpStatusCode.OK, jsonHeaders)
+        }
+
+        client(engine).complete("m", "s", "u", maxTokens = 4000, reasoningEffort = "low")
+
+        assertEquals(4000, seen?.maxCompletionTokens)
+        assertEquals("low", seen?.reasoningEffort)
+    }
+
+    @Test
+    fun `maxTokens and reasoningEffort are omitted from the wire payload when null`() = runTest {
+        var raw = ""
+        val engine = MockEngine { req ->
+            val bytes = (req.body as io.ktor.http.content.OutgoingContent.ByteArrayContent).bytes()
+            raw = bytes.decodeToString()
+            respond(envelope("{}"), HttpStatusCode.OK, jsonHeaders)
+        }
+
+        client(engine).complete("m", "s", "u")
+
+        assertTrue(!raw.contains("reasoning_effort"))
+        assertTrue(!raw.contains("max_completion_tokens"))
     }
 }
