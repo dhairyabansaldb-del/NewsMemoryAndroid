@@ -21,3 +21,7 @@ Thumbs.db
 
 # Diagnostic notification dumps — contain personal notification content
 notif-dump*.txt
+
+# Python bytecode (eval tooling)
+__pycache__/
+*.pyc
