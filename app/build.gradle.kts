@@ -74,8 +74,18 @@ abstract class GenerateSharedConfig : DefaultTask() {
     @get:InputFile abstract val promptFile: RegularFileProperty
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
-    /** Escape for a normal Kotlin string literal ($ matters — Kotlin interpolates). */
+    /**
+     * Escape for a normal Kotlin string literal ($ matters — Kotlin interpolates).
+     *
+     * CR is stripped first, before the backslash pass. core.autocrlf is true on Windows, so a
+     * fresh clone or git worktree checks the shared text files out with CRLF; leaving the CR
+     * raw emitted a real carriage return into the generated literal and broke it across lines
+     * (~200 "Expecting member declaration" errors from a file nobody edits). A long-lived
+     * working tree hides this because its copy is already LF. .gitattributes pins the checkout
+     * too — this is the belt to that pair of braces, and it also covers hand-edited files.
+     */
     private fun esc(s: String): String = s
+        .replace("\r", "")
         .replace("\\", "\\\\").replace("\"", "\\\"")
         .replace("$", "\\$").replace("\n", "\\n")
 

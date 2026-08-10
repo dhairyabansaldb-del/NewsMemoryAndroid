@@ -25,3 +25,6 @@ notif-dump*.txt
 # Python bytecode (eval tooling)
 __pycache__/
 *.pyc
+
+# Agent worktrees — separate checkouts of this same repo, never content
+.claude/worktrees/

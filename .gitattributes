@@ -1,0 +1,7 @@
+# shared/ is read by two languages at two different times: Kotlin at build time (the
+# GenerateSharedConfig task inlines the prompt into a string literal) and Python at run time
+# (the eval harness). A CRLF checkout broke the generated Kotlin, and it only ever showed up
+# on a fresh clone or worktree — never in a long-lived working tree whose copy was already LF.
+# Pin the line endings so both readers see identical bytes on every platform.
+shared/*.txt   text eol=lf
+shared/*.json  text eol=lf
