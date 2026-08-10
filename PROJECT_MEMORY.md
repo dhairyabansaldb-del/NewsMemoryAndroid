@@ -1,7 +1,8 @@
 # PROJECT_MEMORY.md — News Memory (Android)
 
 > Context-handoff doc for an engineer with zero prior context. Prioritizes the
-> non-obvious: decisions, reasoning, history, gotchas. Last updated 2026-06-18.
+> non-obvious: decisions, reasoning, history, gotchas. Last updated 2026-08-10.
+> **Start here: §8 (current state) and §5.1 (why Phase 5 looks the way it does).**
 
 **Naming note:** the app is **News Memory** (package `com.dhairya.newsmemory`). The
 working folder is `C:\Signals Noted project` and an early idea name was "Signals Noted";
@@ -10,8 +11,8 @@ web project by the same owner** (Dhairya); the design docs cite it only as prece
 the Groq/Kotlin stack. There is no Marginalia code here.
 
 This project uses **v0 / v1 / v2** phasing, not "V1/V1.5". Map accordingly: v0 = the
-internal data-pipe milestone (mostly built), v1 = the shippable memory layer (not built
-yet), v2 = future graph UI.
+internal data-pipe milestone (**code-complete; awaiting its 3-day gate**), v1 = the shippable
+memory layer, i.e. recurrence (not built yet), v2 = future graph UI.
 
 ---
 
@@ -42,14 +43,14 @@ NOT reach the user in real time — only via the three digests. This is a featur
 ## 2. ARCHITECTURE
 
 **Single Android app, no backend, no auth, no accounts.** The only external call is to the
-Groq API (planned, Phase 5), at most ~4×/day. Everything else is on-device.
+Groq API (live since Phase 5), at most ~4×/day. Everything else is on-device.
 
 ```
 Android OS notifications
    → NewsListenerService (allowlist gate FIRST, then capture + intercept)
    → Room DB ("the archive" — single source of truth)
    → DigestPipeline (WorkManager + AlarmManager, 3×/day)
-        → near-dup merge → cluster (heuristic now / Groq in v1) → assemble → 1 push
+        → near-dup merge → cluster (Groq, heuristic fallback) → assemble → 1 push
    → Compose UI (reads the archive; "Almanac" design)
    → [v1] Memory engine: recurrence counting over the archive
 ```
@@ -62,7 +63,7 @@ Android OS notifications
   queries + migrations + Flow). **DataStore 1.1.1** for prefs (allowlist, digest times, theme).
 - **WorkManager 2.10.0 + AlarmManager** for scheduling (exact-while-idle alarm fires the
   slot; WorkManager does the pipeline work with retries).
-- **Ktor 3.0.3 (CIO)** + kotlinx-serialization for the Groq call (not yet wired).
+- **Ktor 3.0.3 (CIO)** + kotlinx-serialization for the Groq call (`llm/GroqClient`).
 - **No DI framework.** Hand-rolled `AppContainer` (created in `App.onCreate()`) exposes
   singletons. Hilt/Koin rejected as overkill for a single-module first Android app.
 - **AGP 8.7.3, minSdk 29, targetSdk 35, compileSdk 35.** Target device: Samsung Galaxy
@@ -120,14 +121,16 @@ threads are derived (entity + date range), not stored, to avoid a sync problem.
 
 2. **Hybrid clustering: heuristic always, Groq on top.** Stage-2 Jaccard near-dup merge
    (`Deduper`, threshold 0.55, union-find) runs **always** — it's the v0 dedup guarantee
-   independent of Groq and shrinks the LLM payload. Groq (Phase 5) adds topic labels +
-   entities; on any failure we fall back to heuristic and tag the digest `HEURISTIC`.
-   Trade-off: heuristic topic labels are bad (single top-TF token → "Dropping", "Kishans").
-   Accepted because Groq replaces them and degradation is visible.
+   independent of Groq and shrinks the LLM payload. Groq adds same-event clustering, topic
+   labels, a synthesized headline + entities; on any failure we fall back to heuristic and
+   tag the digest `HEURISTIC`. Trade-off: heuristic topic labels are bad (single top-TF
+   token → "Dropping", "Kishans"). Accepted because Groq replaces them and degradation is
+   visible. **The fallback being silent-by-design is exactly how the pipeline once sat in
+   permanent heuristic mode unnoticed — see §5.1.**
 
 3. **Fully on-device, no backend.** A year of headlines is ~36 MB. Rejected Supabase. This
    is also the strongest version of the privacy goal. Manual JSON export (SAF) is the only
-   data-egress hatch (planned Phase 5).
+   data-egress hatch (shipped, `371ce94`).
 
 4. **Schema is a first-class deliverable, shipped whole in v0.** All v1 tables exist now so
    there's no migration mid-project, and by v1 day one the archive already holds weeks of
@@ -188,8 +191,95 @@ is the source of truth; summary:
     `adb shell dumpsys notification` dump** of the owner's actual apps.
   - **Phase B** (folded into `557b61d` / `093edb7`) — interception (decision #6).
 - **Phase C** (`0e4f26c`) — the Almanac UI redesign (theming, fonts, all screens, bottom nav).
+- **Phase C feedback** (`bfbedf8`) — hero card now shows the most *recent* digest (was: first
+  non-empty slot in M→E→N order, so a 6-story Evening hid a 34-story Night); Archive became a
+  month calendar (tap a date → that day's three slots).
+- **Phase 5 (Groq), built in four commits** — see §5.1 below for the full arc:
+  - `b27ac42` — `llm/` package: Ktor `GroqClient`, versioned prompt, strict response
+    validation, `GroqClusterEngine` with heuristic fallback, wired via `AppContainer` only
+    when a key is present.
+  - `371ce94` — JSON archive export via SAF (the EDD §3 egress hatch; was a dead stub).
+  - `65361b9` — re-arm the alarm when digest times change (a time change previously took
+    effect only after the *next* digest ran); `GroqCluster` debug logging.
+  - `5567b78` — parser repairs LLM responses instead of rejecting them.
+  - `47fe0eb` — **clustering-v2**: the quality fix set (§5.1).
 
-What's NOT shipped: v1 (recurrence, query screen) and Phase 5 (Groq).
+What's NOT shipped: v1 (recurrence engine, "What's building", query screen).
+
+---
+
+## 5.1 PHASE 5 (GROQ): WHY IT LOOKS THE WAY IT DOES
+
+Phase 5 took three rounds of real-world correction. The *end state* is simple; the reasons
+are not, and every one of them is a trap you'd fall back into by "simplifying".
+
+**Round 1 — validation was too strict (fixed in `5567b78`).** The EDD says the LLM response
+is valid only if the returned ids *partition* the input set. Enforced literally, that
+rejected essentially every real response: at ~30 headlines the model reliably fumbles id
+bookkeeping (a duplicate id, a dropped one) even when the grouping is good. The pipeline sat
+in permanent heuristic fallback and nobody noticed, because fallback is silent by design.
+**`ClusterResponseParser` now REPAIRS rather than rejects** — dedupe ids, drop out-of-range,
+unplaced ids become singleton clusters, blank topic gets a heuristic label. A throw (→
+heuristic) is reserved for real failure: malformed JSON, empty cluster list, or the model
+placing under half the headlines.
+
+**Round 2 — the owner used it for two days and it was WORSE than the heuristic.** Four
+distinct failures, four distinct root causes (all fixed in `47fe0eb`):
+1. **Topical mega-clusters.** The v1 prompt permitted grouping by "the same closely-related
+   topic", so the model built topic buckets ("all business news") instead of same-event
+   clusters — worst case, ten notifications under one "Inc42" card. Because a digest card
+   shows only the representative headline, every swallowed story became *invisible*, and
+   because items sort by summed source count, the garbage floated to the top.
+2. **Headline hid half the merge.** The prompt could only *pick* an input headline
+   ("never invent headlines" — the anti-hallucination rule), so a correct 2-source merge
+   still showed one side only.
+3. **Wrong topic labels**, and teaser-title starvation: 36% of captured titles are ≤3 words
+   ("Five-year low", "Apply or skip?", or an X account name as the title) — the model was
+   clustering nearly blind because only titles were sent.
+4. **Residual heuristic fallbacks.**
+
+**The fix was validated BEFORE shipping, on 30 days of real captured data.** Rather than
+iterate on-device a day at a time, `tools/eval_clustering.py` replays every captured window
+from a Settings JSON export through the real pipeline against the live Groq API. Config A
+(as-shipped) vs config B (proposed) over 37 comparable windows:
+
+| metric | A | B |
+|---|---|---|
+| mega-clusters (>4 stories) | 70 | **0** |
+| windows containing one | 28/37 | **0/37** |
+| worst single cluster | 38 stories | 2 stories |
+
+Every merge B made was hand-checked and correct. **Keep this harness working** — it is the
+only way to evaluate a prompt/model change without burning days of live use.
+
+**What clustering-v2 actually changed** (don't undo these):
+- **Prompt is same-EVENT-only**, with explicit negative examples ("both are markets news" is
+  not a reason to merge) and a stated expectation that singleton clusters are normal.
+- **A synthesized `headline` per cluster**, capped at 16 words and constrained to facts
+  present in the inputs — the deliberate, contained relaxation of "never invent headlines"
+  (the raw-notification drawer still shows the true sources underneath).
+- **`title + body` snippet sent per story**, not title alone — this is what rescues teaser
+  titles and account-name titles.
+- **Model is `openai/gpt-oss-120b` at `reasoning_effort=low`** (llama-3.1-8b showed a hard
+  capacity ceiling — flawless at 15 headlines, sloppy by 30; and Groq is deprecating
+  llama-3.3). `low` beat `medium` in the replay: same merge quality, half the tokens, and
+  large windows stopped truncating.
+- **`Deduper` mixes body tokens in when a title is degenerate (≤2 tokens).** Rows sharing a
+  useless title ("Inc42") have Jaccard 1.0 with each other, so stage 2 was force-merging
+  unrelated stories *before Groq ever saw them*. This one is upstream of the LLM entirely.
+- **Concatenated-id repair**: gpt-oss-120b's signature mistake is a dropped comma, emitting
+  ids 6 and 8 as `68`. Split it when the split is unique.
+- **One re-ask on a malformed response** before falling back (the model is non-deterministic
+  enough that a retry often succeeds). A *network/HTTP* failure does not re-ask — `GroqClient`
+  already retried internally.
+- **Per-call token budgeting.** The free tier pre-counts input + `max_completion_tokens`
+  against an 8000 TPM cap, so the completion budget is derived from actual prompt size (and
+  body snippets shrink if a huge digest won't fit). `GroqClient` also retries HTTP 400 —
+  the free tier intermittently 400s valid requests under load.
+
+**Verified live on-device 2026-08-10:** `LLM ok: 15 stories → 15 clusters via
+openai/gpt-oss-120b` — zero mega-clusters, informative synthesized headlines, correct topic
+chips, no "basic grouping" tag.
 
 ---
 
@@ -226,6 +316,28 @@ What's NOT shipped: v1 (recurrence, query screen) and Phase 5 (Groq).
   if shade behaviour looks odd during testing.
 - **Variable fonts need `@OptIn(ExperimentalTextApi::class)`** (FontVariation) — already set
   at the top of `ui/theme/Type.kt`.
+- **Shell can no longer broadcast to `DigestAlarmReceiver`** (it's not exported; worked
+  2026-06-19, silently blocked by 2026-07-14 after a One UI tightening). `am broadcast` still
+  prints `result=0` — the denial only appears in `dumpsys activity broadcasts`. Working
+  trigger for a manual digest:
+  ```
+  adb shell run-as com.dhairya.newsmemory am broadcast --user 0 \
+    -n com.dhairya.newsmemory/.pipeline.DigestAlarmReceiver -e window_id 2026-08-10-E
+  ```
+  `--user 0` is required (the default user -2 throws INTERACT_ACROSS_USERS).
+- **Don't try to read `archive.db` off the device on this host.** The pull is byte-identical
+  (md5 matches) but the device WAL can't be replayed by the host's Python 3.9 sqlite, so
+  every table reads as empty; there's no `sqlite3` binary on device or host. Verify state
+  through the app UI instead: `adb shell am start -n com.dhairya.newsmemory/.MainActivity
+  --es digest_id <window_id>` **on a cold start** (a warm activity ignores the extra), plus
+  logcat.
+- **`GroqCluster` logcat tag is the definitive pipeline-mode signal.** `adb logcat
+  GroqCluster:V '*:S'` prints either `LLM ok: N stories → M clusters via <model>` or the
+  failure reason plus `→ heuristic fallback`. Note the digest UI's "basic grouping" tag means
+  the same thing — its *absence* is the success signal.
+- **USB debugging gets turned off across long gaps.** Re-enable: Settings → About phone →
+  Software information → tap Build number ×7 → Developer options → USB debugging. If the
+  device still won't authorise, check Auto Blocker (Security and privacy).
 
 ---
 
@@ -234,8 +346,10 @@ What's NOT shipped: v1 (recurrence, query screen) and Phase 5 (Groq).
 - **Single `:app` module.** Package-by-feature under `com.dhairya.newsmemory`.
 - **No DI framework** — constructor injection from `AppContainer`. Don't add Hilt.
 - **Pure logic extracted for testing:** `CapturePolicy`, `NotificationExtractor`, `Deduper`,
-  `WindowCalculator`, `RebinderLogic` are pure objects with unit tests. Prefer this pattern.
-- **Tests:** JUnit + Robolectric + in-memory Room. 66 unit tests currently green. Run:
+  `WindowCalculator`, `RebinderLogic`, `ClusterResponseParser` are pure objects with unit
+  tests. Prefer this pattern — it's why the LLM repair logic is testable without a network.
+- **Tests:** JUnit + Robolectric + in-memory Room; Ktor `MockEngine` for the Groq path (no
+  network in tests). 108 unit tests currently green. Run:
   ```
   $env:JAVA_HOME="C:\Users\bandh\android-tools\jdk\jdk-17.0.19+10"
   .\gradlew.bat testDebugUnitTest
@@ -257,53 +371,64 @@ What's NOT shipped: v1 (recurrence, query screen) and Phase 5 (Groq).
 
 ---
 
-## 8. v1.5-equivalent — CURRENT WORK (= Phase 5, the Groq integration)
+## 8. CURRENT STATE — v0 is code-complete; next is the v0 gate
 
-We are between the Almanac UI (done) and **Phase 5 (Groq)**, which is the next thing to build.
+**Done:** Phases 1–4, A, B, C, Phase C feedback, and **Phase 5 (Groq) — complete and verified
+on-device 2026-08-10** (§5.1). HEAD is `47fe0eb`, working tree clean, pushed to
+`github.com/dhairyabansaldb-del/NewsMemoryAndroid` (branch `master`). 108 unit tests green.
 
-**Done:** Phases 1–4, A, B, C. Capture + interception + encoding verified on-device. Almanac
-UI installed and under the owner's visual review.
+Capture + interception + encoding, the Almanac UI, LLM clustering with topic taxonomy and
+entities, and JSON export are all live. The topic chips are lit (LLM supplies real taxonomy
+labels); entities are being written every LLM digest, which is the substrate v1 reads.
 
-**In progress / next (Phase 5 scope):**
-- Ktor `GroqClient` (`llm/`), key from `local.properties`, timeout 30s, retry ×2 on 429/5xx.
-- Versioned clustering prompt that ALSO assigns a **canonical topic from the Almanac
-  taxonomy** (Markets / AI & Agents / IPO / Policy / Tech) + a clean representative headline
-  + entities. This is what lights up the topic-chip colours (currently neutral because
-  heuristic mode emits single-word labels).
-- Strict JSON validation (ids partition the input set) → heuristic fallback on any failure.
-- Entity upserts wired into the existing `DigestPipeline` transaction (the cluster engine is
-  already pluggable — `DigestPipeline(clusterEngine = ...)`).
-- Settings **JSON export** (SAF) — currently a stubbed `onExport = {}` row.
-- Model: `llama-3.1-8b-instant` for clustering; `llama-3.3-70b-versatile` for the v1 one-shot query.
+**Exactly where we left off:** clustering-v2 installed on the S24 FE and confirmed working on
+a real digest. Nothing is in flight — no uncommitted work, no half-finished edit.
 
-**Blockers / pending:**
-- Needs the owner's **Groq API key** (he agreed to provide it at Phase 5).
-- Owner is mid-review of Phase C; UI tweaks may land before Phase 5.
+**The immediate next step is the v0 gate: a 3-day live test.** Use the phone normally and
+confirm:
+1. the three daily digests actually arrive on schedule (alarm chain survives),
+2. they stay in **LLM** mode — no "basic grouping" tags creeping in,
+3. **the listener survives overnight** on One UI. This is the #1 platform risk and has
+   *never* been formally confirmed across a full night (§9). The Settings health panel
+   (listener heartbeat / last capture) is the instrument.
 
-**Exactly where we left off:** Phase C committed (`0e4f26c`) and installed on the device for
-visual review. The immediate next step was to collect the owner's Almanac feedback, then
-start Phase 5 (Groq) — which also retroactively fixes the topic labels/colours.
+**Then v1** — the actual product thesis, and the first thing that isn't plumbing:
+recurrence engine (EDD §7.1 — pure counting over `item_entities`, no LLM judgement on
+headlines), flag chips on digest items, "What's building" on Home (currently a stub), and the
+one-shot query screen (EDD §7.2, `llama-3.3-70b-versatile` in the spec — **needs replacing,
+Groq is deprecating it; clustering already moved to `openai/gpt-oss-120b`**).
 
-After Phase 5 comes the **v0 gate** (3-day live test) and then **v1** (recurrence engine +
-flags + one-shot query screen), then the **30-day kill-gate** (the real go/no-go: do the
-recurrence pushes surface things the user didn't already know?).
+**Then the 30-day kill-gate** — the real go/no-go, and a *product* question no amount of code
+quality settles: do the recurrence pushes surface things the owner didn't already know?
 
 ---
 
 ## 9. OPEN THREADS / TODOs
 
-- **Replace `fallbackToDestructiveMigration()` with a real migration** before any long-lived
-  data accumulation. (Landmine, §6.)
-- **Quiet the `NewsListener` debug logging** before v0 final.
-- **Topic taxonomy** depends on Groq; heuristic labels stay ugly until Phase 5.
-- **JSON export** is a stub.
-- **Overnight listener-survival test** on One UI was started but never formally confirmed
-  across a full night — still the #1 platform risk.
-- **"What's building"** on Home is a V1 stub (the design itself tags it V1).
-- **Phase C visual feedback** from the owner is outstanding (fonts rendering? light theme?
-  expand/collapse feel?).
+Blocking the v0 gate / v1:
+- **Overnight listener-survival test** on One UI still never formally confirmed across a full
+  night — **the #1 platform risk**, and the main thing the 3-day v0 gate is for.
+- **Replace `fallbackToDestructiveMigration()` with a real migration** before the 30-day v1
+  accumulation window starts — otherwise a schema change silently wipes the archive that the
+  kill-gate depends on. (Landmine, §6.) The archive now holds real history worth keeping.
+- **`llama-3.3-70b-versatile` (EDD §7.2, the v1 one-shot query) is being deprecated by Groq.**
+  Pick a replacement when building v1 — clustering already moved to `openai/gpt-oss-120b`.
+
+Known quality gaps (real, not blocking):
+- **Junk capture rows.** Publisher/account-name-only notifications (e.g. an X post whose
+  title is just "Inc42") still enter the archive as stories. This is a `NotificationExtractor`
+  parse-quality/JUNK-set gap — a *capture-side* bug, not a clustering one. `Deduper` was
+  taught to stop force-merging them (§5.1) but they still show up as items.
+- **Quiet the `NewsListener` debug logging** before declaring v0 final (`GroqCluster` logging
+  is deliberate and useful — keep it until the pipeline is boring).
+- **"What's building"** on Home is a v1 stub (the design itself tags it v1).
+
+Open questions:
 - **UNCERTAIN:** whether web/browser push sources are in scope (PRD left this open); whether
   the v1 feedback/taste loop ships at all (explicitly fenced to a future addendum).
+
+Resolved since the last revision: Phase C visual feedback (collected → `bfbedf8`); JSON export
+(shipped, `371ce94`); topic taxonomy/ugly labels (fixed by Phase 5 + clustering-v2).
 
 ---
 
@@ -322,7 +447,17 @@ These hold more depth than is reproduced above. **The authoritative specs now li
 - **`docs/ADDENDUM-interception.md`** — the interception decision in full.
 - **`app/schemas/com.dhairya.newsmemory.data.db.ArchiveDatabase/{1,2}.json`** — exact schema.
 - **`gradle/libs.versions.toml`** — exact dependency versions.
+- **`tools/eval_clustering.py`** + **`tools/eval_report.py`** — the offline replay harness
+  (§5.1). Replays real captured windows from a Settings JSON export through the pipeline
+  against the live Groq API, so a prompt/model change can be A/B'd on a month of real data
+  before it ships. **Use this before changing the prompt or model.** Note it holds Python
+  ports of `Normalizer`/`Deduper`/`ClusterResponseParser` — keep them in sync with the Kotlin.
+  Exports contain personal notification content: keep them out of git.
+
+**Where the EDD is now deliberately out of date** (the code is right, the spec is stale):
+strict partition validation (§5.2) is now repair-based; clustering is `openai/gpt-oss-120b`,
+not `llama-3.1-8b-instant`; the LLM prompt sends title+body and returns a synthesized
+headline. See §5.1 for why in each case.
 
 The full spec set (PRD + EDD + SAD + Almanac handoff) is self-contained in `docs/` — a fresh
 clone has everything.
-```
