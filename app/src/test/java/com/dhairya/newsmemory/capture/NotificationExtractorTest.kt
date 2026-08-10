@@ -170,6 +170,84 @@ class NotificationExtractorTest {
         assertNull(items[0].snippet)
     }
 
+    // Source-name-only titles (the junk-capture-row gap). A publisher/account name is never
+    // a headline — but the guard must stay off real stories, so it needs a name-shaped title
+    // AND no body behind it.
+
+    @Test
+    fun `account-name-only title with no body is unparseable`() {
+        // An X post whose EXTRA_TITLE is just the account name and carries no body.
+        val items = NotificationExtractor.extract(
+            input(pkg = "com.twitter.android", appLabel = "X", title = "Inc42")
+        )
+        assertEquals(1, items.size)
+        assertEquals(ParseQuality.UNPARSEABLE, items[0].quality)
+    }
+
+    @Test
+    fun `the same account-name title with a real body is parsed normally`() {
+        val items = NotificationExtractor.extract(
+            input(
+                pkg = "com.twitter.android", appLabel = "X", title = "Inc42",
+                text = "Zepto raises \$450 million at a \$7 billion valuation"
+            )
+        )
+        assertEquals(ParseQuality.FULL, items[0].quality)
+        assertEquals("Zepto raises \$450 million at a \$7 billion valuation", items[0].snippet)
+    }
+
+    @Test
+    fun `at-handle title with no body is unparseable`() {
+        val items = NotificationExtractor.extract(
+            input(pkg = "com.twitter.android", appLabel = "X", title = "@Inc42")
+        )
+        assertEquals(ParseQuality.UNPARSEABLE, items[0].quality)
+    }
+
+    @Test
+    fun `title-case publisher name with no body is unparseable in any package`() {
+        val items = NotificationExtractor.extract(
+            input(pkg = "com.app.news", appLabel = "NewsApp", title = "Business Standard")
+        )
+        assertEquals(ParseQuality.UNPARSEABLE, items[0].quality)
+    }
+
+    @Test
+    fun `title equal to the declared publisher is unparseable`() {
+        val items = NotificationExtractor.extract(
+            input(pkg = "com.app.news", appLabel = "NewsApp", title = "Mint", subText = "Mint")
+        )
+        assertEquals(ParseQuality.UNPARSEABLE, items[0].quality)
+        assertEquals("Mint", items[0].publisher)
+    }
+
+    @Test
+    fun `short but real headline with no body is still parsed`() {
+        val items = NotificationExtractor.extract(
+            input(pkg = "com.app.news", appLabel = "NewsApp", title = "Sensex falls 800 points")
+        )
+        assertEquals("Sensex falls 800 points", items[0].title)
+        assertEquals(ParseQuality.FULL, items[0].quality)
+    }
+
+    @Test
+    fun `terse three-word headline with no body is still parsed`() {
+        val items = NotificationExtractor.extract(
+            input(pkg = "com.eterno", appLabel = "Dailyhunt", title = "Trump signs order")
+        )
+        assertEquals("Trump signs order", items[0].title)
+        assertEquals(ParseQuality.FULL, items[0].quality)
+    }
+
+    @Test
+    fun `terse title-case headline with a verb is still parsed`() {
+        // Title case alone must not condemn a headline — the verb is what saves it.
+        val items = NotificationExtractor.extract(
+            input(pkg = "com.app.news", appLabel = "NewsApp", title = "Nifty Hits Record")
+        )
+        assertEquals(ParseQuality.FULL, items[0].quality)
+    }
+
     @Test
     fun `aggregator with no body is unparseable, never the publisher as headline`() {
         val items = NotificationExtractor.extract(

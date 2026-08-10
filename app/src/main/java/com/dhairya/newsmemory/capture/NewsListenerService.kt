@@ -32,7 +32,9 @@ class NewsListenerService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        Log.d(TAG, "listener connected")
+        // Lifecycle, not chatter: listener survival on One UI is the #1 platform risk, so
+        // bind/unbind stays visible in logcat even in a release build.
+        Log.i(TAG, "listener connected")
         scope.launch { container.settingsStore.heartbeat() }
         // Sweep the existing shade backlog.
         runCatching { activeNotifications }.getOrNull()?.forEach { handle(it, fromBacklog = true) }
@@ -42,6 +44,13 @@ class NewsListenerService : NotificationListenerService() {
                 container.settingsStore.heartbeat()
             }
         }
+    }
+
+    override fun onListenerDisconnected() {
+        // The listener dying (Samsung killing the bound service) is exactly what the
+        // rebinder and the health panel exist for — never silence this one.
+        Log.w(TAG, "listener disconnected")
+        super.onListenerDisconnected()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) = handle(sbn, fromBacklog = false)
@@ -65,13 +74,13 @@ class NewsListenerService : NotificationListenerService() {
             val result = container.notificationRepository.insertExtracted(packageName, items, postTime)
             if (result.anyUnparseable) container.settingsStore.flagLimitedSupport(packageName)
             container.settingsStore.heartbeat()
-            Log.d(TAG, "captured ${result.inserted} from $packageName (backlog=$fromBacklog)")
+            if (VERBOSE) Log.d(TAG, "captured ${result.inserted} from $packageName (backlog=$fromBacklog)")
         }
 
         // INTERCEPT (Phase B): pull it from the shade now that it's captured. Global for all
         // allowlisted apps. Can't pre-empt the post, so a brief blip is possible.
         runCatching { cancelNotification(key) }
-            .onSuccess { Log.d(TAG, "intercepted (cancelled) $packageName key=$key") }
+            .onSuccess { if (VERBOSE) Log.d(TAG, "intercepted (cancelled) $packageName key=$key") }
             .onFailure { Log.w(TAG, "cancel failed for $packageName", it) }
     }
 
@@ -113,5 +122,13 @@ class NewsListenerService : NotificationListenerService() {
     companion object {
         const val HEARTBEAT_INTERVAL_MS = 15L * 60 * 1000
         private const val TAG = "NewsListener"
+
+        /**
+         * Per-notification capture/interception tracing. It earned its keep on-device during
+         * Phase A/B, so it stays in the source — flip to true to watch the capture path in
+         * logcat again (`adb logcat NewsListener:V '*:S'`). Lifecycle and failure logs above
+         * are NOT gated by this: a dead listener must always be visible.
+         */
+        private const val VERBOSE = false
     }
 }
