@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "Config for the OFFLINE entity-extraction eval harness (tools/eval_entities.py).",
+    "",
+    "This file is deliberately SEPARATE from pipeline-config.json and is NOT yet read",
+    "by the Gradle codegen or check_shared_sync.py: nothing in the app extracts",
+    "entities on its own path today, so there is no Kotlin side to keep in sync and",
+    "adding one now would only add build coupling for a prompt that has not passed",
+    "its quality gate. When the backfill actually ships, fold these keys into the",
+    "codegen the same way clustering's are, and add them to check_shared_sync.py.",
+    "",
+    "Until then: change values here, re-run the harness, read the report.",
+    "",
+    "TOKEN BUDGET MATHS (Groq free tier pre-counts input + max_completion_tokens",
+    "against a hard 8000 TPM cap, so every call must RESERVE its worst case):",
+    "  input      ~= est_tokens(prompt ~750) + batchSize * ~65 tok/item",
+    "  completion  = completionBase + completionPerItem * batchSize, clamped so that",
+    "                input + completion <= tpmBudget",
+    "  at batchSize 12: input ~1530, completion ~1240, reservation ~2770",
+    "  -> 8000 / 2770 = ~2.9 calls per rolling 60s window (~21s effective spacing)",
+    "tpmBudget is held under the 8000 hard cap so a mis-estimate does not 429."
+  ],
+
+  "promptVersion": "entity-v1",
+  "promptFile": "entity-prompt-v1.txt",
+
+  "entityModel": "openai/gpt-oss-120b",
+  "reasoningEffort": "low",
+
+  "batchSize": 12,
+  "maxEntitiesPerItem": 4,
+
+  "tpmBudget": 6500,
+  "completionBase": 400,
+  "completionPerItem": 70,
+  "minCompletionTokens": 800,
+  "bodyChars": 160
+}
