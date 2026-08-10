@@ -1,13 +1,11 @@
 package com.dhairya.newsmemory.data
 
-import android.content.Context
-import androidx.room.Room
-import androidx.test.core.app.ApplicationProvider
 import com.dhairya.newsmemory.data.db.ArchiveDatabase
 import com.dhairya.newsmemory.data.db.Digest
 import com.dhairya.newsmemory.data.db.DigestItem
 import com.dhairya.newsmemory.data.db.ItemSource
 import com.dhairya.newsmemory.data.db.RawNotification
+import com.dhairya.newsmemory.testing.inMemoryArchive
 import com.dhairya.newsmemory.util.Normalizer
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -25,9 +23,7 @@ class ArchiveExporterTest {
 
     @Before
     fun setup() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        db = Room.inMemoryDatabaseBuilder(context, ArchiveDatabase::class.java)
-            .allowMainThreadQueries().build()
+        db = inMemoryArchive()
     }
 
     @After

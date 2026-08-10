@@ -29,9 +29,11 @@ abstract class ArchiveDatabase : RoomDatabase() {
     companion object {
         fun build(context: Context): ArchiveDatabase =
             Room.databaseBuilder(context, ArchiveDatabase::class.java, "archive.db")
-                // v2 expands raw_notifications (publisher + raw payload). Pre-accumulation,
-                // so a clean rebuild is acceptable rather than carrying a migration.
-                .fallbackToDestructiveMigration()
+                // No destructive fallback. It was acceptable pre-accumulation, but the archive
+                // now holds the history the v1 recurrence gate counts over — a silent wipe on a
+                // schema bump would destroy the thing being measured. v1 adds no columns, so
+                // nothing needs migrating; any future bump must ship a real Migration and will
+                // fail loudly here until it does.
                 .build()
     }
 }

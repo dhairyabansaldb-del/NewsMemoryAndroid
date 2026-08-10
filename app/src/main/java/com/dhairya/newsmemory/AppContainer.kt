@@ -7,6 +7,7 @@ import com.dhairya.newsmemory.data.SettingsStore
 import com.dhairya.newsmemory.data.db.ArchiveDatabase
 import com.dhairya.newsmemory.llm.GroqClient
 import com.dhairya.newsmemory.llm.GroqClusterEngine
+import com.dhairya.newsmemory.memory.RecurrenceEngine
 import com.dhairya.newsmemory.pipeline.ClusterResult
 import com.dhairya.newsmemory.pipeline.Deduper
 import com.dhairya.newsmemory.pipeline.DigestNotifier
@@ -27,7 +28,9 @@ class AppContainer(private val context: Context) {
 
     // Groq is wired only when a key is configured in local.properties (BuildConfig). With no
     // key the pipeline stays fully heuristic — the app builds and runs without it.
-    private val groqClient: GroqClient? by lazy {
+    // `internal` rather than private: entity backfill needs the same client (one key, one
+    // transport, one retry policy). Note RecurrenceEngine deliberately does NOT get it.
+    internal val groqClient: GroqClient? by lazy {
         BuildConfig.GROQ_API_KEY.takeIf { it.isNotBlank() }?.let { GroqClient(it) }
     }
 
@@ -41,4 +44,7 @@ class AppContainer(private val context: Context) {
     val digestPipeline: DigestPipeline by lazy {
         DigestPipeline(database, settingsStore, clusterEngine = clusterEngine, notifier = digestNotifier)
     }
+
+    /** v1 memory layer. Pure counting over the archive — no Groq client by design. */
+    val recurrenceEngine: RecurrenceEngine by lazy { RecurrenceEngine(database.entityDao()) }
 }

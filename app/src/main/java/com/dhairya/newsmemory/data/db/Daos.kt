@@ -1,5 +1,6 @@
 package com.dhairya.newsmemory.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -93,6 +94,21 @@ interface DigestDao {
     suspend fun allItemSources(): List<ItemSource>
 }
 
+/** One (item, entity) pairing, fetched for a whole digest in a single query. */
+data class ItemEntityName(
+    @ColumnInfo(name = "item_id") val itemId: Long,
+    @ColumnInfo(name = "entity_id") val entityId: Long,
+    @ColumnInfo(name = "name") val name: String
+)
+
+/** An entity ranked by how much it recurred over a trailing window ("What's building"). */
+data class EntityTally(
+    @ColumnInfo(name = "entity_id") val entityId: Long,
+    @ColumnInfo(name = "name") val name: String,
+    @ColumnInfo(name = "item_count") val itemCount: Int,
+    @ColumnInfo(name = "day_count") val dayCount: Int
+)
+
 @Dao
 interface EntityDao {
 
@@ -136,17 +152,86 @@ interface EntityDao {
     )
     suspend fun itemCountSince(entityId: Long, since: Long): Int
 
+    /**
+     * Every entity linked to any of these items, in one query. Recurrence needs the whole
+     * digest's pairings at once; N per-item round-trips would be wasteful on the read path.
+     */
+    @Query(
+        """SELECT ie.item_id AS item_id, e.id AS entity_id, e.name AS name
+           FROM entities e
+           JOIN item_entities ie ON ie.entity_id = e.id
+           WHERE ie.item_id IN (:itemIds)"""
+    )
+    suspend fun entitiesForItems(itemIds: List<Long>): List<ItemEntityName>
+
+    /**
+     * Distinct calendar days on which an entity appeared since a cutoff. digest_id is
+     * "YYYY-MM-DD-{M|E|N}", so the date is its first 10 chars — three slots on one day
+     * count once. Date arithmetic stays in Kotlin; SQL only reports the days.
+     */
+    @Query(
+        """SELECT DISTINCT substr(di.digest_id, 1, 10) FROM digest_items di
+           JOIN item_entities ie ON ie.item_id = di.id
+           JOIN digests d ON d.id = di.digest_id
+           WHERE ie.entity_id = :entityId AND d.window_start >= :since"""
+    )
+    suspend fun activeDaysSince(entityId: Long, since: Long): List<String>
+
+    /**
+     * Distinct publishers carrying an entity within one digest. Keys on publisher, not
+     * package_name, so two outlets inside one aggregator app count separately (§6).
+     */
+    @Query(
+        """SELECT COUNT(DISTINCT COALESCE(rn.publisher, rn.package_name))
+           FROM raw_notifications rn
+           JOIN item_sources s ON s.raw_id = rn.id
+           JOIN digest_items di ON di.id = s.item_id
+           JOIN item_entities ie ON ie.item_id = di.id
+           WHERE ie.entity_id = :entityId AND di.digest_id = :digestId"""
+    )
+    suspend fun publisherCountInDigest(entityId: Long, digestId: String): Int
+
+    /** Top recurring entities over a trailing window — the "What's building" data source. */
+    @Query(
+        """SELECT e.id AS entity_id, e.name AS name,
+                  COUNT(DISTINCT di.id) AS item_count,
+                  COUNT(DISTINCT substr(di.digest_id, 1, 10)) AS day_count
+           FROM entities e
+           JOIN item_entities ie ON ie.entity_id = e.id
+           JOIN digest_items di ON di.id = ie.item_id
+           JOIN digests d ON d.id = di.digest_id
+           WHERE d.window_start >= :since
+           GROUP BY e.id
+           ORDER BY item_count DESC, day_count DESC
+           LIMIT :limit"""
+    )
+    suspend fun topEntitiesSince(since: Long, limit: Int): List<EntityTally>
+
     @Query("SELECT * FROM entities")
     suspend fun all(): List<TrackedEntity>
 
     @Query("SELECT * FROM item_entities")
     suspend fun allRefs(): List<ItemEntityCrossRef>
 
-    /** Digest items in a digest that have no linked entities (heuristic-mode backfill, EDD §7.3). */
+    /**
+     * Digest items anywhere in the archive with no linked entities (heuristic-mode backfill,
+     * EDD §7.3). Bounded: backfill drains in batches so it never fires an unbounded number of
+     * extraction calls in one pass. Oldest first, so history fills in chronologically.
+     */
     @Query(
         """SELECT di.* FROM digest_items di
            LEFT JOIN item_entities ie ON ie.item_id = di.id
+           WHERE ie.item_id IS NULL
+           ORDER BY di.id
+           LIMIT :limit"""
+    )
+    suspend fun itemsWithoutEntities(limit: Int): List<DigestItem>
+
+    /** How much of the archive still needs backfilling — drives the Settings progress copy. */
+    @Query(
+        """SELECT COUNT(*) FROM digest_items di
+           LEFT JOIN item_entities ie ON ie.item_id = di.id
            WHERE ie.item_id IS NULL"""
     )
-    suspend fun itemsWithoutEntities(): List<DigestItem>
+    suspend fun itemsWithoutEntitiesCount(): Int
 }

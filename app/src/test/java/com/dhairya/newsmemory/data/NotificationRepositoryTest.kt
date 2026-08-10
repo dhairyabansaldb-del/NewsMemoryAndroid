@@ -1,9 +1,9 @@
 package com.dhairya.newsmemory.data
 
 import android.content.Context
-import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.dhairya.newsmemory.data.db.ArchiveDatabase
+import com.dhairya.newsmemory.testing.inMemoryArchive
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -25,8 +25,7 @@ class NotificationRepositoryTest {
     @Before
     fun setup() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        db = Room.inMemoryDatabaseBuilder(context, ArchiveDatabase::class.java)
-            .allowMainThreadQueries().build()
+        db = inMemoryArchive()
         repo = NotificationRepository(db.rawNotificationDao(), SettingsStore(context)) { zone }
     }
 

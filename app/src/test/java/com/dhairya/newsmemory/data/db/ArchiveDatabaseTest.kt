@@ -1,8 +1,6 @@
 package com.dhairya.newsmemory.data.db
 
-import android.content.Context
-import androidx.room.Room
-import androidx.test.core.app.ApplicationProvider
+import com.dhairya.newsmemory.testing.inMemoryArchive
 import com.dhairya.newsmemory.util.Normalizer
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -22,10 +20,7 @@ class ArchiveDatabaseTest {
 
     @Before
     fun setup() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        db = Room.inMemoryDatabaseBuilder(context, ArchiveDatabase::class.java)
-            .allowMainThreadQueries()
-            .build()
+        db = inMemoryArchive()
     }
 
     @After
@@ -182,7 +177,7 @@ class ArchiveDatabaseTest {
         val eid = entityDao.upsert("Sarvam", "sarvam", seenAt = 1)
         entityDao.link(listOf(ItemEntityCrossRef(linked, eid)))
 
-        val orphans = entityDao.itemsWithoutEntities()
+        val orphans = entityDao.itemsWithoutEntities(limit = 50)
         assertEquals(1, orphans.size)
         assertEquals(bare, orphans[0].id)
         assertNotEquals(linked, orphans[0].id)

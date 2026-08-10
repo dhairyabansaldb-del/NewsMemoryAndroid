@@ -1,11 +1,11 @@
 package com.dhairya.newsmemory.pipeline
 
 import android.content.Context
-import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.dhairya.newsmemory.data.NotificationRepository
 import com.dhairya.newsmemory.data.SettingsStore
 import com.dhairya.newsmemory.data.db.ArchiveDatabase
+import com.dhairya.newsmemory.testing.inMemoryArchive
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -29,8 +29,7 @@ class DigestPipelineTest {
     @Before
     fun setup() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        db = Room.inMemoryDatabaseBuilder(context, ArchiveDatabase::class.java)
-            .allowMainThreadQueries().build()
+        db = inMemoryArchive()
         val settings = SettingsStore(context)
         repo = NotificationRepository(db.rawNotificationDao(), settings) { zone }
         pipeline = DigestPipeline(db, settings, zone = { zone })   // no notifier in tests

@@ -4,9 +4,15 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -75,6 +81,31 @@ fun TopicPill(topic: String, modifier: Modifier = Modifier) {
             .padding(horizontal = 9.dp, vertical = 4.dp)
     ) {
         Text(topic.uppercase(), style = PillLabel.copy(fontSize = 10.sp), color = tc.pillText)
+    }
+}
+
+/**
+ * Recurrence tag: trend glyph + count on a highlighter band (handoff §Story card).
+ * Sits top-right of the topic pill. Uses `highlightBg`, the token reserved for exactly this.
+ */
+@Composable
+fun RecurrenceChip(label: String, modifier: Modifier = Modifier) {
+    val a = LocalAlmanac.current
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(a.highlightBg)
+            .padding(horizontal = 9.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.TrendingUp,
+            contentDescription = null,
+            tint = a.ink,
+            modifier = Modifier.size(11.dp)
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(label, style = PillLabel.copy(fontSize = 10.sp), color = a.ink)
     }
 }
 
