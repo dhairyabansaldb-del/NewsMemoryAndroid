@@ -1,9 +1,31 @@
 # Engineering Design Document — Personal News Memory Layer (Android)
 
-**Status:** Approved for build
+> ## ⚠️ FROZEN as of 10 August 2026 — historical record, not current truth
+>
+> This document is preserved as the **design intent at the start of the build**. It is no
+> longer maintained, and parts of it are deliberately wrong about the shipped app.
+> **[`PROJECT_MEMORY.md`](../PROJECT_MEMORY.md) is the living record** — read it for
+> current state, and read §5.1 there for why the LLM integration diverged.
+>
+> Do not "fix" code to match this document. Where they disagree, the code is right and
+> this is stale. Known divergences:
+>
+> | This doc says | What actually shipped | Why |
+> |---|---|---|
+> | Phases 1–7 (§10) | 1, 2, 3, 4, **A, B, C**, 5 | A/B/C were a mid-course pivot after real output was reviewed: capture/encoding rework, notification interception, the Almanac UI redesign. Never back-filled here. |
+> | "listener, not a manager"; never dismisses others' notifications | The app **intercepts** — cancels allowlisted notifications after capture | Reversed by the owner 2026-06-17. See `ADDENDUM-interception.md`. |
+> | Strict validation: ids must partition the input set (§5.2) | Validation **repairs** the response; a throw is reserved for real failure | Enforced literally, it rejected nearly every real response and the pipeline sat in permanent silent fallback. |
+> | `llama-3.1-8b-instant` for clustering (§5.2) | `openai/gpt-oss-120b`, `reasoning_effort=low` | 8B topic-bucketed at real digest sizes; Groq is deprecating the llama models. |
+> | Prompt receives headlines; "never invent headlines" | Receives title **+ body snippet**; returns a **synthesized** cluster headline | 36% of captured titles are ≤3-word teasers; pick-one-input hid half of every merge. |
+> | `llama-3.3-70b-versatile` for the v1 query (§7.2) | **Undecided** — being deprecated | Needs a replacement when v1 is built. |
+>
+> Constants named here (thresholds, models, the prompt) now live in `shared/`, which the
+> app and the eval harness both read. Never copy a value out of it.
+
+**Status:** Frozen 10 August 2026 (was: Approved for build)
 **Companion documents:** PRD (requirements), System Architecture Document (component structure)
 **Owner:** Dhairya
-**Last updated:** 10 June 2026
+**Last updated:** 10 June 2026 — content unchanged since; see the freeze notice above.
 
 This document specifies *how* each component is built: schemas, algorithms, permission flows, scheduling mechanics, prompts, failure handling, the Claude Code build plan, and honest effort estimates. Decisions locked with the product owner: native Kotlin + Compose; hybrid LLM (Groq primary, heuristics fallback); fully on-device storage; unread digests archive silently; digest unit is headline-list-grouped-by-topic; target device Samsung Galaxy S24 FE; sideloaded APK; free tools only; v1 query is one-shot.
 

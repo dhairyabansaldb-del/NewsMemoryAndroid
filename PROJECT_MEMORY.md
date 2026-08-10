@@ -444,16 +444,26 @@ Resolved since the last revision: Phase C visual feedback (collected → `bfbedf
 
 ## Footer: deeper references (read these for full detail)
 
-These hold more depth than is reproduced above. **The authoritative specs now live in
-`docs/` in the repo** (added 2026-06-18):
-- **`docs/Engineering_Design_Document.md`** (EDD) — the authoritative implementation spec.
-  Code comments cite it by section ("EDD §4.1" etc.); they point here.
-- **`docs/System_Architecture_Document.md`** (SAD) — components, boundaries, data flow.
+**THIS FILE IS THE LIVING RECORD.** The `docs/` set was frozen on 2026-08-10: it captures
+design intent at the start of the build and is no longer maintained. Where `docs/` and this
+file disagree, **this file wins**; where this file and the code disagree, **the code wins**.
+Code comments still cite "EDD §4.1" — those are pointers into the frozen spec for context,
+not statements that the spec is current.
+
+- **`docs/Engineering_Design_Document.md`** (EDD) — **FROZEN 2026-08-10.** The original
+  implementation spec. Its header carries a table of every known divergence from the shipped
+  app (phases A/B/C, interception, repair-not-reject validation, the model change, the
+  prompt contract). Read it for original reasoning, never as current truth.
+- **`docs/System_Architecture_Document.md`** (SAD) — **FROZEN.** Components, boundaries,
+  data flow. Note its "listener, not a manager" boundary was reversed by the interception
+  decision — see the addendum below.
 - **`docs/README.md`** + **`docs/Visualizer.html`** — the locked Almanac UI spec (design
   tokens, exact colours/sizes/copy per screen). The README is the design source of truth;
   "Cloud Core" in it means *this* app.
-- **`docs/PRD_news_memory_layer.md`** — the upstream PRD: the *what/why* (problem, goals,
-  non-goals, success metrics, the v0 and 30-day v1 gates). The EDD/SAD are downstream of this.
+- **`docs/PRD_news_memory_layer.md`** — **FROZEN.** The upstream PRD: the *what/why*
+  (problem, goals, non-goals, success metrics, the v0 and 30-day v1 gates). The EDD/SAD are
+  downstream of this. Its problem statement and gate definitions still stand — it's the one
+  frozen doc whose *intent* hasn't drifted, only its implementation detail.
 - **`docs/ADDENDUM-interception.md`** — the interception decision in full.
 - **`app/schemas/com.dhairya.newsmemory.data.db.ArchiveDatabase/{1,2}.json`** — exact schema.
 - **`gradle/libs.versions.toml`** — exact dependency versions.
@@ -464,10 +474,6 @@ These hold more depth than is reproduced above. **The authoritative specs now li
   ports of `Normalizer`/`Deduper`/`ClusterResponseParser` — keep them in sync with the Kotlin.
   Exports contain personal notification content: keep them out of git.
 
-**Where the EDD is now deliberately out of date** (the code is right, the spec is stale):
-strict partition validation (§5.2) is now repair-based; clustering is `openai/gpt-oss-120b`,
-not `llama-3.1-8b-instant`; the LLM prompt sends title+body and returns a synthesized
-headline. See §5.1 for why in each case.
-
-The full spec set (PRD + EDD + SAD + Almanac handoff) is self-contained in `docs/` — a fresh
-clone has everything.
+The EDD's freeze notice carries the full divergence table; §5.1 above explains the reasoning
+behind each one. The full original spec set (PRD + EDD + SAD + Almanac handoff) remains
+self-contained in `docs/` — a fresh clone has everything, as history.

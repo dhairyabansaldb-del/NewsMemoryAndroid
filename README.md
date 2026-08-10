@@ -81,16 +81,19 @@ current state; §5.1 explains why the LLM integration looks the way it does.
 
 | Document | What it is |
 |---|---|
-| [`PROJECT_MEMORY.md`](PROJECT_MEMORY.md) | Handoff: decisions, history, gotchas, current state |
-| [`docs/PRD_news_memory_layer.md`](docs/PRD_news_memory_layer.md) | The what and why: problem, goals, non-goals, the gates |
-| [`docs/Engineering_Design_Document.md`](docs/Engineering_Design_Document.md) | The authoritative implementation spec (code cites it by section) |
-| [`docs/System_Architecture_Document.md`](docs/System_Architecture_Document.md) | Components, boundaries, data flow |
+| [`PROJECT_MEMORY.md`](PROJECT_MEMORY.md) | **The living record** — decisions, history, gotchas, current state |
+| [`tools/README.md`](tools/README.md) | The offline replay harness — read before changing the prompt or model |
+| [`docs/PRD_news_memory_layer.md`](docs/PRD_news_memory_layer.md) | *Frozen.* The what and why: problem, goals, non-goals, the gates |
+| [`docs/Engineering_Design_Document.md`](docs/Engineering_Design_Document.md) | *Frozen.* The original implementation spec (its header lists every divergence from the shipped app) |
+| [`docs/System_Architecture_Document.md`](docs/System_Architecture_Document.md) | *Frozen.* Components, boundaries, data flow |
 | [`docs/README.md`](docs/README.md) | The locked "Almanac" UI spec — design tokens, per-screen copy |
 | [`docs/ADDENDUM-interception.md`](docs/ADDENDUM-interception.md) | Why the app cancels other apps' notifications |
-| [`tools/README.md`](tools/README.md) | The offline replay harness — read before changing the prompt or model |
 
-Note that the EDD is deliberately out of date in a few places where the code moved on;
-`PROJECT_MEMORY.md`'s footer lists exactly where and why.
+**`docs/` was frozen on 2026-08-10** — it records design intent at the start of the build,
+not the current app. Several parts are deliberately wrong now (the phase list, the
+"listener not a manager" boundary, the LLM contract and model). Where they disagree:
+`PROJECT_MEMORY.md` beats `docs/`, and the code beats both. Don't change code to match a
+frozen spec.
 
 ## Privacy
 
