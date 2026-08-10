@@ -1,5 +1,6 @@
 package com.dhairya.newsmemory.llm
 
+import com.dhairya.newsmemory.SharedConfig
 import com.dhairya.newsmemory.llm.prompts.ClusteringPrompt
 import com.dhairya.newsmemory.pipeline.ClusterResult
 import com.dhairya.newsmemory.pipeline.Deduper
@@ -76,14 +77,18 @@ class GroqClusterEngine(
     private fun estTokens(text: String): Int = text.length / 4 + 1
 
     companion object {
-        const val CLUSTERING_MODEL = "openai/gpt-oss-120b"
-        const val REASONING_EFFORT = "low"
+        // Model, effort and the token budget come from shared/pipeline-config.json so the
+        // offline eval harness measures the same configuration the app ships.
+        const val CLUSTERING_MODEL = SharedConfig.CLUSTERING_MODEL
+        const val REASONING_EFFORT = SharedConfig.REASONING_EFFORT
 
-        // Free-tier TPM for openai/gpt-oss-120b is 8000, pre-counting input +
+        // Free-tier TPM for the clustering model is 8000, pre-counting input +
         // max_completion_tokens; budgeted with margin under the hard cap since token
         // estimation (chars/4) is approximate.
-        private const val TPM_BUDGET = 6500
-        private const val MIN_COMPLETION_TOKENS = 1500
+        private const val TPM_BUDGET = SharedConfig.TPM_BUDGET
+        private const val MIN_COMPLETION_TOKENS = SharedConfig.MIN_COMPLETION_TOKENS
+
+        // App-internal, no harness counterpart.
         private const val PARSE_ATTEMPTS = 2
     }
 }

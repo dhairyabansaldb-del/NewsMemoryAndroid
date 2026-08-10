@@ -1,3 +1,4 @@
+import groovy.json.JsonSlurper
 import java.util.Properties
 
 plugins {
@@ -61,6 +62,65 @@ android {
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
+
+/**
+ * Generates SharedConfig.kt from shared/pipeline-config.json + the prompt file, so the
+ * app and the offline eval harness (tools/eval_clustering.py) read ONE source of truth.
+ * Generating at build time keeps these compile-time constants — no runtime parsing on
+ * the digest path — while the harness reads the same JSON directly at run time.
+ */
+abstract class GenerateSharedConfig : DefaultTask() {
+    @get:InputFile abstract val configJson: RegularFileProperty
+    @get:InputFile abstract val promptFile: RegularFileProperty
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    /** Escape for a normal Kotlin string literal ($ matters — Kotlin interpolates). */
+    private fun esc(s: String): String = s
+        .replace("\\", "\\\\").replace("\"", "\\\"")
+        .replace("$", "\\$").replace("\n", "\\n")
+
+    @TaskAction
+    fun generate() {
+        @Suppress("UNCHECKED_CAST")
+        val cfg = JsonSlurper().parse(configJson.get().asFile) as Map<String, Any>
+        val prompt = promptFile.get().asFile.readText().trimEnd()
+        val stopwords = (cfg["stopwords"] as List<*>).joinToString(", ") { "\"$it\"" }
+
+        val dir = outputDir.get().asFile.resolve("com/dhairya/newsmemory")
+        dir.mkdirs()
+        dir.resolve("SharedConfig.kt").writeText(
+            """
+            package com.dhairya.newsmemory
+
+            // GENERATED at build time — DO NOT EDIT.
+            // Source: shared/pipeline-config.json + shared/${cfg["promptFile"]}
+            // Edit those instead; the eval harness reads the same files.
+            object SharedConfig {
+                const val PROMPT_VERSION = "${cfg["promptVersion"]}"
+                const val CLUSTERING_MODEL = "${cfg["clusteringModel"]}"
+                const val REASONING_EFFORT = "${cfg["reasoningEffort"]}"
+                const val TPM_BUDGET = ${cfg["tpmBudget"]}
+                const val MIN_COMPLETION_TOKENS = ${cfg["minCompletionTokens"]}
+                const val DEFAULT_BODY_CHARS = ${cfg["defaultBodyChars"]}
+                const val JACCARD_THRESHOLD = ${cfg["jaccardThreshold"]}
+                val STOPWORDS: Set<String> = setOf($stopwords)
+                const val CLUSTERING_SYSTEM_PROMPT: String = "${esc(prompt)}"
+            }
+            """.trimIndent() + "\n"
+        )
+    }
+}
+
+val generateSharedConfig = tasks.register<GenerateSharedConfig>("generateSharedConfig") {
+    configJson.set(rootProject.file("shared/pipeline-config.json"))
+    promptFile.set(rootProject.file("shared/clustering-prompt-v2.txt"))
+    outputDir.set(layout.buildDirectory.dir("generated/sharedconfig"))
+}
+
+android.sourceSets.getByName("main").kotlin.srcDir(generateSharedConfig)
+
+// KSP compiles the whole source set, so it needs the generated file too.
+tasks.matching { it.name.startsWith("ksp") }.configureEach { dependsOn(generateSharedConfig) }
 
 dependencies {
     implementation(libs.androidx.core.ktx)

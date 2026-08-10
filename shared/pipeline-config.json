@@ -1,0 +1,42 @@
+{
+  "_comment": [
+    "SINGLE SOURCE OF TRUTH for every value the Android app and the offline eval",
+    "harness (tools/eval_clustering.py) must agree on. The harness replays real",
+    "captured windows through the same pipeline to evaluate prompt/model changes —",
+    "the moment it diverges from shipped code it stops predicting the app's",
+    "behaviour, which is exactly the failure this file prevents.",
+    "",
+    "Kotlin reads it at BUILD time: a Gradle task generates SharedConfig.kt from it",
+    "(see app/build.gradle.kts), so these stay compile-time constants with no runtime",
+    "parsing on the digest path. Python reads it directly at run time.",
+    "",
+    "Change a value here and BOTH sides pick it up on their next run. Never copy a",
+    "value out of here into either language.",
+    "",
+    "App-internal constants with no cross-language counterpart (HTTP retry counts,",
+    "timeouts, heartbeat intervals, notification channel ids) deliberately stay in",
+    "their own Kotlin companion objects — putting them here would add build coupling",
+    "for nothing."
+  ],
+
+  "promptVersion": "clustering-v2",
+  "promptFile": "clustering-prompt-v2.txt",
+
+  "clusteringModel": "openai/gpt-oss-120b",
+  "reasoningEffort": "low",
+
+  "tpmBudget": 6500,
+  "minCompletionTokens": 1500,
+  "defaultBodyChars": 160,
+
+  "jaccardThreshold": 0.55,
+
+  "stopwords": [
+    "a", "an", "the", "of", "in", "on", "at", "to", "for", "by", "with", "from",
+    "and", "or", "but", "as", "is", "are", "was", "were", "be", "been", "has",
+    "have", "had", "will", "would", "could", "should", "may", "might", "its",
+    "it", "this", "that", "these", "those", "after", "before", "over", "under",
+    "up", "down", "out", "off", "amid", "vs", "via", "into", "about", "than",
+    "not", "no", "new", "say", "says", "said"
+  ]
+}

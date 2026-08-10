@@ -1,5 +1,6 @@
 package com.dhairya.newsmemory.pipeline
 
+import com.dhairya.newsmemory.SharedConfig
 import com.dhairya.newsmemory.data.db.RawNotification
 import com.dhairya.newsmemory.util.Normalizer
 
@@ -11,7 +12,8 @@ import com.dhairya.newsmemory.util.Normalizer
  */
 object Deduper {
 
-    const val JACCARD_THRESHOLD = 0.55
+    /** From shared/pipeline-config.json — the eval harness uses the same threshold. */
+    const val JACCARD_THRESHOLD = SharedConfig.JACCARD_THRESHOLD
 
     data class MergedStory(
         val representative: RawNotification,

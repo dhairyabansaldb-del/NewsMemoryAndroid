@@ -10,16 +10,25 @@ Usage:
   python tools/eval_clustering.py --export <archive-export.json> --config B --out b.jsonl
 
 Configs:
-  A = pipeline as shipped 2026-07-14: llama-3.1-8b-instant, title-only input,
-      clustering-v1 prompt (same story OR closely-related topic).
-  B = proposed fix set: openai/gpt-oss-120b, title+body input, clustering-v2
-      prompt (same-event only + synthesized headline), degenerate-title dedup
-      tokens, max_tokens guard, one re-ask on malformed response.
+  A = historical baseline, the pipeline as shipped 2026-07-14: llama-3.1-8b-instant,
+      title-only input, clustering-v1 prompt (same story OR closely-related topic).
+  B = what the app ships today: model, reasoning effort and prompt all load from
+      shared/, plus title+body input, degenerate-title dedup tokens, per-request
+      token budgeting, and one re-ask on a malformed response. Because B reads the
+      same shared config the app is built from, B is not an approximation of
+      production — it is production.
+
+See tools/README.md for the workflow, rate-limit behaviour, and how to read results.
 
 The export contains personal notification content — keep it (and the results)
-out of git. The Kotlin sources of truth are util/Normalizer.kt,
-pipeline/Deduper.kt, llm/ClusterResponseParser.kt, llm/prompts/ — keep the
-ports below in sync when those change.
+out of git.
+
+Every value this harness must agree with the app on — model, reasoning effort,
+token budget, Jaccard threshold, stopwords, and the prompt itself — is loaded
+from shared/pipeline-config.json and shared/clustering-prompt-v2.txt, the same
+files a Gradle task generates SharedConfig.kt from. Change a value there and
+both sides pick it up. The remaining Kotlin logic (Normalizer, Deduper,
+ClusterResponseParser) is still hand-ported below — keep it in sync by hand.
 """
 
 import argparse
@@ -33,16 +42,19 @@ from pathlib import Path
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# ---------------------------------------------------------------- Normalizer port
+# ------------------------------------------------- shared config (single source of truth)
 
-STOPWORDS = {
-    "a", "an", "the", "of", "in", "on", "at", "to", "for", "by", "with", "from",
-    "and", "or", "but", "as", "is", "are", "was", "were", "be", "been", "has",
-    "have", "had", "will", "would", "could", "should", "may", "might", "its",
-    "it", "this", "that", "these", "those", "after", "before", "over", "under",
-    "up", "down", "out", "off", "amid", "vs", "via", "into", "about", "than",
-    "not", "no", "new", "say", "says", "said",
-}
+SHARED_DIR = Path(__file__).resolve().parent.parent / "shared"
+SHARED = json.loads((SHARED_DIR / "pipeline-config.json").read_text(encoding="utf-8"))
+PROMPT_V2 = (SHARED_DIR / SHARED["promptFile"]).read_text(encoding="utf-8").rstrip()
+
+STOPWORDS = set(SHARED["stopwords"])
+JACCARD_THRESHOLD = SHARED["jaccardThreshold"]
+TPM_BUDGET = SHARED["tpmBudget"]
+MIN_COMPLETION_TOKENS = SHARED["minCompletionTokens"]
+DEFAULT_BODY_CHARS = SHARED["defaultBodyChars"]
+CLUSTERING_MODEL = SHARED["clusteringModel"]
+REASONING_EFFORT = SHARED["reasoningEffort"]
 
 
 def normalize(text):
@@ -82,7 +94,7 @@ def dedup_tokens(row, enrich_degenerate):
 
 
 def dedup_merge(rows, enrich_degenerate=False):
-    """Jaccard >= 0.55 union-find; longest headline represents (Deduper.kt)."""
+    """Jaccard >= threshold union-find; longest headline represents (Deduper.kt)."""
     if not rows:
         return []
     tokens = [dedup_tokens(r, enrich_degenerate) for r in rows]
@@ -96,7 +108,7 @@ def dedup_merge(rows, enrich_degenerate=False):
 
     for i in range(len(rows)):
         for j in range(i + 1, len(rows)):
-            if jaccard(tokens[i], tokens[j]) >= 0.55:
+            if jaccard(tokens[i], tokens[j]) >= JACCARD_THRESHOLD:
                 parent[find(i)] = find(j)
 
     groups = defaultdict(list)
@@ -138,49 +150,10 @@ Rules:
 Output schema (exactly this shape):
 {{"clusters":[{{"topic":"Markets","headline_ids":[1,3],"representative":3,"entities":["Sensex","FII selling"]}}]}}"""
 
-PROMPT_V2 = """You are a news-desk editor. You receive a numbered list of news items (headline, and
-sometimes a snippet after an em dash). Group them into clusters of the SAME NEWS EVENT,
-then label and summarise each cluster. Reply with ONLY a JSON object — no prose.
-
-CLUSTERING RULE — put two items in one cluster ONLY if they report the same underlying
-news event: the same announcement, match, incident, deal, or viral moment. A reader who
-saw one item would learn nothing substantial from the other.
-- Different outlets covering the same event MUST be merged even when worded very
-  differently: "RBI holds repo rate steady at 6.5%" and "RBI keeps repo rate unchanged
-  in policy review" are the same decision -> one cluster.
-- NEVER group items merely because they share a topic, industry, company type, or
-  category: "Zomato tests voice ordering" and "Swiggy raises funding" are both
-  food-delivery business news but different events -> separate clusters. "Both are
-  markets news" is NOT a reason to merge.
-- Singleton clusters are normal; some windows contain no same-event pairs at all.
-
-For each cluster:
-- "topic": use one of these canonical topics when the cluster genuinely fits:
-    Markets (indices, stocks, FII/DII flows, market moves)
-    AI & Agents (artificial intelligence products, models, research, agents)
-    IPO (IPOs, listings, fundraising rounds, venture funding)
-    Policy (government policy, regulation, courts, RBI decisions)
-    Tech (technology companies and products that are not AI)
-  Otherwise write a short 1–3 word topic of your own (e.g. Sports, Entertainment,
-  Weather, Crime, World, Politics). Never force an unrelated story into a canonical
-  topic, and never use vague labels like "General" or "News".
-- "headline": ONE concise, informative headline (max 16 words) stating the news of
-  this cluster. Use ONLY facts present in the provided items — never add numbers,
-  names, or claims that are not in the text. When an item's headline is a vague
-  teaser ("Five-year low", "Apply or skip?"), rewrite it into an informative
-  headline using its snippet. For multi-item clusters, cover the event, not one item.
-- "headline_ids": the input ids in this cluster. Every input id must appear in
-  exactly ONE cluster across the whole response — never drop, invent, or repeat ids.
-- "representative": the id whose text best stands for the cluster.
-- "entities": up to 4 recurring trackable subjects (organisations, people,
-  instruments, ongoing events) as short canonical names, e.g. "Sensex", "RBI",
-  "FII selling", "Jaishankar". Empty array if none.
-
-Output schema (exactly this shape):
-{"clusters":[{"topic":"Markets","headline":"Sensex falls 800 points as FII selling continues","headline_ids":[1,3],"representative":3,"entities":["Sensex","FII selling"]}]}"""
+# PROMPT_V2 is loaded from shared/ at the top of this file.
 
 
-def build_user(stories, with_body, body_chars=160):
+def build_user(stories, with_body, body_chars=DEFAULT_BODY_CHARS):
     lines = ["Headlines:"]
     for i, s in enumerate(stories):
         rep = s["representative"]
@@ -337,12 +310,10 @@ def parse_and_repair(content, stories, expect_headline):
 
 # ---------------------------------------------------------------- Configs
 
-# Free-tier TPM for openai/gpt-oss-120b is 8000 and Groq pre-counts
-# input + max_completion_tokens against it, so the completion budget must be
-# derived per request, and calls must be paced to stay under the per-minute cap.
-# Budgeted well under the hard cap (not 7600/8000) because est_tokens() is a
-# chars/4 approximation and actual usage can run over the pre-flight estimate.
-TPM_BUDGET = 6500
+# Groq pre-counts input + max_completion_tokens against a per-minute cap, so the
+# completion budget is derived per request (TPM_BUDGET, from shared/) and calls are
+# paced to stay under the provider's hard cap. TPM_HARD_CAP is a platform fact and is
+# harness-only — the app makes one call per digest and never needs to pace.
 TPM_HARD_CAP = 8000
 
 
@@ -385,9 +356,10 @@ CONFIGS = {
     "A": dict(model="llama-3.1-8b-instant", prompt=PROMPT_V1, with_body=False,
               enrich_degenerate=False, tpm_paced=False, reask_on_malformed=False,
               expect_headline=False, reasoning_effort=None),
-    "B": dict(model="openai/gpt-oss-120b", prompt=PROMPT_V2, with_body=True,
+    # B mirrors what the app ships — model/effort/prompt all come from shared/.
+    "B": dict(model=CLUSTERING_MODEL, prompt=PROMPT_V2, with_body=True,
               enrich_degenerate=True, tpm_paced=True, reask_on_malformed=True,
-              expect_headline=True, reasoning_effort="low"),
+              expect_headline=True, reasoning_effort=REASONING_EFFORT),
 }
 
 

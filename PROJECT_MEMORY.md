@@ -363,6 +363,16 @@ chips, no "basic grouping" tag.
   had no toolchain; it was installed from scratch). `JAVA_HOME`/`ANDROID_HOME` set at user scope.
 - **Secrets:** Groq key goes in `local.properties` as `GROQ_API_KEY` (gitignored) → exposed
   via `BuildConfig.GROQ_API_KEY`. Never commit it.
+- **`shared/` is the single source of truth for anything the app and the eval harness must
+  agree on** — clustering model, reasoning effort, token budget, Jaccard threshold,
+  stopwords, and the prompt text itself. Kotlin reads it at *build* time (a Gradle task
+  generates `SharedConfig.kt`, so they stay compile-time constants — no runtime parsing on
+  the digest path); `tools/eval_clustering.py` reads it at *run* time. **Never copy a value
+  out of `shared/` into either language** — that reintroduces the drift this prevents, and
+  a harness that has drifted is measuring an app you don't ship. Verify with
+  `./gradlew.bat generateSharedConfig && python tools/check_shared_sync.py`.
+  App-internal constants with no harness counterpart (HTTP retries, timeouts, heartbeat
+  intervals, channel ids) deliberately stay in their own companion objects.
 - **Commits:** one per phase, descriptive multi-line body, co-authored trailer. Work happens
   on `master`; `main` is the nominal default. Commit messages written via a temp file
   (`.git/COMMIT_MSG.tmp` + `git commit -F`) because PowerShell here-strings mangled them.

@@ -1,5 +1,6 @@
 package com.dhairya.newsmemory.util
 
+import com.dhairya.newsmemory.SharedConfig
 import java.security.MessageDigest
 
 /**
@@ -32,12 +33,6 @@ object Normalizer {
     fun titleTokens(title: String?): Set<String> =
         normalize(title).split(' ').filter { it.length > 1 && it !in STOPWORDS }.toSet()
 
-    private val STOPWORDS = setOf(
-        "a", "an", "the", "of", "in", "on", "at", "to", "for", "by", "with", "from",
-        "and", "or", "but", "as", "is", "are", "was", "were", "be", "been", "has",
-        "have", "had", "will", "would", "could", "should", "may", "might", "its",
-        "it", "this", "that", "these", "those", "after", "before", "over", "under",
-        "up", "down", "out", "off", "amid", "vs", "via", "into", "about", "than",
-        "not", "no", "new", "say", "says", "said"
-    )
+    /** From shared/pipeline-config.json — the eval harness uses the same list. */
+    private val STOPWORDS = SharedConfig.STOPWORDS
 }
