@@ -15,13 +15,16 @@ plus recurrence.
 
 ## Status
 
-**v0 is code-complete and verified on-device** (Samsung Galaxy S24 FE, One UI).
-Capture, interception, encoding, the Almanac UI, LLM clustering, and JSON export all
-work end-to-end. 108 unit tests green.
+**v0 has been in daily use since July 2026** on a Samsung Galaxy S24 FE — capture,
+interception, encoding, the Almanac UI, LLM clustering and JSON export all work end-to-end.
 
-Next up is the **3-day v0 gate** (do digests arrive on schedule, stay in LLM mode, and
-does the listener survive overnight?), then **v1**: the recurrence engine — the part
-that makes this a memory layer rather than a bundler.
+**v1 — the recurrence engine — is code-complete but not yet verified on device.** Counting
+over the archive, recurrence chips on digest items, a live "What's building" card, and an
+entity backfill that makes the historical archive countable. 174 unit tests green.
+
+The next step is on-device verification, and then the **30-day kill-gate**: do the recurrence
+signals surface anything the owner didn't already know? That is a product question no amount
+of code quality settles.
 
 ## How it works
 
@@ -31,7 +34,7 @@ Android notifications
   → Room DB               "the archive" — the single source of truth
   → DigestPipeline        3×/day: near-dup merge → LLM cluster → assemble → one push
   → Compose UI            digest, calendar archive, allowlist, settings
-  → [v1] recurrence       counting over entities, never LLM judgement on headlines
+  → recurrence            counting over entities, never LLM judgement on headlines
 ```
 
 Three deliberate design commitments, each with a real cost:
@@ -63,7 +66,7 @@ No Android Studio required. JDK 17, the Android SDK, and Gradle live under
 # Groq key (gitignored) — the app builds and runs fine without it, staying heuristic
 echo "GROQ_API_KEY=gsk_..." >> local.properties
 
-./gradlew.bat testDebugUnitTest     # 108 tests, no device or network needed
+./gradlew.bat testDebugUnitTest     # 174 tests, no device or network needed
 ./gradlew.bat assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```

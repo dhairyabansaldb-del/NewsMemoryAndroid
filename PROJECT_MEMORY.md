@@ -1,8 +1,9 @@
 # PROJECT_MEMORY.md — News Memory (Android)
 
 > Context-handoff doc for an engineer with zero prior context. Prioritizes the
-> non-obvious: decisions, reasoning, history, gotchas. Last updated 2026-08-10.
-> **Start here: §8 (current state) and §5.1 (why Phase 5 looks the way it does).**
+> non-obvious: decisions, reasoning, history, gotchas. Last updated 2026-08-11.
+> **Start here: §8 (current state), §5.1 (why Phase 5 looks the way it does), and
+> §5.2 (v1 and why the archive needed backfilling).**
 
 **Naming note:** the app is **News Memory** (package `com.dhairya.newsmemory`). The
 working folder is `C:\Signals Noted project` and an early idea name was "Signals Noted";
@@ -11,8 +12,9 @@ web project by the same owner** (Dhairya); the design docs cite it only as prece
 the Groq/Kotlin stack. There is no Marginalia code here.
 
 This project uses **v0 / v1 / v2** phasing, not "V1/V1.5". Map accordingly: v0 = the
-internal data-pipe milestone (**code-complete; awaiting its 3-day gate**), v1 = the shippable
-memory layer, i.e. recurrence (not built yet), v2 = future graph UI.
+internal data-pipe milestone (**shipped, in daily use since 2026-07**), v1 = the shippable
+memory layer, i.e. recurrence (**code-complete 2026-08-11, not yet verified on device** — §8),
+v2 = future graph UI.
 
 ---
 
@@ -28,8 +30,8 @@ was explicitly rejected. It is a **personal news memory layer**:
   on-device archive.
 - Three times a day it produces a **Digest**: near-duplicate stories merged, grouped by
   topic, delivered as one push.
-- The real value (v1, not yet built) is **recurrence surfacing**: the archive notices what
-  is *building* across days ("4th story on FII selling this week") by counting, not by
+- The real value (v1, built) is **recurrence surfacing**: the archive notices what is
+  *building* across days ("4th story on FII selling this week") by counting, not by
   interpreting headlines.
 
 Core problem: news arrives as fragmented one-line pushes that don't *retain*; multi-day
@@ -77,7 +79,12 @@ Android OS notifications
 - `pipeline/` — `DigestPipeline`, `Deduper`, `HeuristicClusterer`, `Windows`, `DigestScheduling`,
   `Workers`, `DigestNotifier`
 - `ui/` — `theme/`, `components/`, `home/`, `digest/`, `archive/`, `allowlist/`, `settings/`, `onboarding/`
+- `llm/` — `GroqClient` (transport only), `GroqClusterEngine` + `ClusterResponseParser`,
+  `EntityExtractor` + `EntityResponseParser`, `prompts/`
+- `memory/` — `RecurrenceEngine` (counting, no Groq) and `EntityBackfill` (v1, §5.2)
 - `AppContainer.kt`, `App.kt`, `MainActivity.kt`
+- `shared/` (repo root) — the cross-language config both Kotlin and the Python harnesses read
+  (§7). Generated into `SharedConfig.kt` at build time.
 
 Build/run: see §7.
 
@@ -103,9 +110,10 @@ existing data. Schema JSON is committed at `app/schemas/.../1.json` and `2.json`
   `opened_at` null = never opened (archived silently).
 - **`digest_items`** — one merged story cluster. `topic_label`, `headline`, `source_count`, `position`.
 - **`item_sources`** — which raw notifications fed which cluster (item_id, raw_id).
-- **`entities`** + **`item_entities`** — canonical recurring subjects. **Written in v0,
-  read in v1.** Merge key is `normalized` (UNIQUE). This is the substrate that makes v1
-  recurrence a pure counting query.
+- **`entities`** + **`item_entities`** — canonical recurring subjects. Merge key is
+  `normalized` (UNIQUE). This is the substrate that makes recurrence a pure counting query.
+  **Written only on the LLM clustering path** — heuristic digests write none, which is why
+  most of the historical archive needed backfilling (§5.2). Also written by `EntityBackfill`.
 
 Recurrence (v1) = `COUNT(DISTINCT digest_items)` joined through `item_entities` for an
 entity over a trailing window. A `recurrence_threads` table was deliberately NOT created —
@@ -204,7 +212,58 @@ is the source of truth; summary:
   - `5567b78` — parser repairs LLM responses instead of rejecting them.
   - `47fe0eb` — **clustering-v2**: the quality fix set (§5.1).
 
-What's NOT shipped: v1 (recurrence engine, "What's building", query screen).
+- **v1 (recurrence), built 2026-08-11 across five parallel tracks** — see §5.2.
+
+What's NOT shipped: the one-shot query screen (EDD §7.2), deliberately deferred.
+
+---
+
+## 5.2 v1 (RECURRENCE): WHAT WAS BUILT, AND THE THING THAT NEARLY WASN'T NOTICED
+
+**The finding that reshaped the plan.** Entities are written at exactly one site —
+`DigestPipeline` — guarded by `if (cluster.entities.isNotEmpty())`, and `HeuristicClusterer`
+never sets them. So **heuristic-mode digests wrote ZERO entity rows.** In the July export that
+meant 87 of 96 digests contributed nothing: 88 entities across 3,008 digest items. Recurrence
+counts over `item_entities`, so the archive looked full and was almost entirely uncountable.
+Without backfill the 30-day kill-gate clock would have restarted from the day v1 shipped.
+
+**What shipped:**
+- **`memory/RecurrenceEngine`** — three counting rules (≥3 items in 7 days, ≥3 publishers in one
+  digest, ≥5 distinct days in 30), one flag per item, capped at 5 per digest, deterministic
+  tie-break so repeated runs over unchanged data agree. **No Groq client, by design** (§4.5).
+- **Derived at read time.** `digest_items` has no flag column, so v1 needed **no migration** —
+  which is what made removing `fallbackToDestructiveMigration()` safe to do in the same breath.
+- **`memory/EntityBackfill` + `llm/EntityExtractor`** — fills entities for historical items.
+- **UI**: recurrence chips on story cards; the "What's building" card is real (7×4 dot matrix,
+  today bottom-right, drawn from `activeDayOffsets`).
+
+**Backfill progress is a WATERMARK, not a "has entities" check.** This is the non-obvious part.
+Progress cannot be inferred from whether an item has entities, because **zero entities is a
+correct and common answer** — teasers, app promos and junk headlines legitimately have no
+recurring subject. Those rows would look unstarted forever and be re-extracted every run, so the
+job would never terminate. `digest_item` ids are autoincrement, so "already attempted" is exactly
+`id <= watermark`, held in DataStore. It advances **only after a batch succeeds**, so a failed
+call is retried rather than skipped. Consequence worth knowing: `reset()` re-offers only items
+that extracted to *zero* — items that already got entities are excluded by the query's
+`ie.item_id IS NULL` and a prompt change can never revise them.
+
+**Extraction failure THROWS rather than degrading**, unlike clustering. There is no heuristic
+entity extractor to fall back to, and a throw is what leaves the watermark unadvanced.
+`BatchOutcome.failed` exists because otherwise a failed batch and an empty queue are both
+`(0, 0, n)` and Settings would report "3000 to go" forever — the same silent degradation that
+hid the permanent heuristic fallback (§5.1).
+
+**Two capture-side fixes were sequenced BEFORE backfill deliberately.** Publisher/account-name-only
+titles now classify UNPARSEABLE, *and* `DigestPipeline` now filters them out — labelling alone
+wasn't enough, they were still being presented as stories. This had to land first: an account
+name recurs every single day, so a junk row admitted to the archive would have outranked every
+real story in the memory layer. `tools/eval_clustering.py` applies the same filter, or a replay
+would measure a pipeline the app doesn't ship.
+
+**Landmine found by building in fresh worktrees:** `GenerateSharedConfig.esc()` escaped `\n` but
+not `\r`. With `core.autocrlf=true` and no `.gitattributes`, **any fresh clone on Windows failed
+to compile** (~200 errors in generated code). A long-lived working tree hides it because its copy
+is already LF. Fixed in `esc()` *and* pinned via `.gitattributes`.
 
 ---
 
@@ -349,7 +408,7 @@ chips, no "basic grouping" tag.
   `WindowCalculator`, `RebinderLogic`, `ClusterResponseParser` are pure objects with unit
   tests. Prefer this pattern — it's why the LLM repair logic is testable without a network.
 - **Tests:** JUnit + Robolectric + in-memory Room; Ktor `MockEngine` for the Groq path (no
-  network in tests). 108 unit tests currently green. Run:
+  network in tests). 174 unit tests currently green. Run:
   ```
   $env:JAVA_HOME="C:\Users\bandh\android-tools\jdk\jdk-17.0.19+10"
   .\gradlew.bat testDebugUnitTest
@@ -381,57 +440,71 @@ chips, no "basic grouping" tag.
 
 ---
 
-## 8. CURRENT STATE — v0 is code-complete; next is the v0 gate
+## 8. CURRENT STATE — v1 is code-complete and UNVERIFIED ON DEVICE
 
-**Done:** Phases 1–4, A, B, C, Phase C feedback, and **Phase 5 (Groq) — complete and verified
-on-device 2026-08-10** (§5.1). HEAD is `47fe0eb`, working tree clean, pushed to
-`github.com/dhairyabansaldb-del/NewsMemoryAndroid` (branch `master`). 108 unit tests green.
+**Done:** Phases 1–4, A, B, C, Phase C feedback, Phase 5 (Groq, §5.1), and **v1 (recurrence,
+§5.2)**. HEAD is `f210f51`, working tree clean, pushed to
+`github.com/dhairyabansaldb-del/NewsMemoryAndroid` (branch `master`). **174 unit tests green,
+`assembleDebug` clean, zero compiler warnings, `check_shared_sync.py` in sync.**
 
-Capture + interception + encoding, the Almanac UI, LLM clustering with topic taxonomy and
-entities, and JSON export are all live. The topic chips are lit (LLM supplies real taxonomy
-labels); entities are being written every LLM digest, which is the substrate v1 reads.
+v0's gate is **passed by observation, not by a formal test**: three weeks of daily use, digests
+arriving on schedule and the listener surviving overnight — you'd have noticed weeks of silence.
+Treat overnight survival as confirmed empirically but never instrumented.
 
-**Exactly where we left off:** clustering-v2 installed on the S24 FE and confirmed working on
-a real digest. Nothing is in flight — no uncommitted work, no half-finished edit.
+**Exactly where we left off — READ THIS FIRST:** every line of v1 is written and unit-tested,
+and **none of it has run on the phone.** The device has not been connected since v1 began. In
+particular the entity backfill has **never made a real Groq call** — every test uses MockEngine.
+Nothing is in flight in git; the gap is verification, not code.
 
-**The immediate next step is the v0 gate: a 3-day live test.** Use the phone normally and
-confirm:
-1. the three daily digests actually arrive on schedule (alarm chain survives),
-2. they stay in **LLM** mode — no "basic grouping" tags creeping in,
-3. **the listener survives overnight** on One UI. This is the #1 platform risk and has
-   *never* been formally confirmed across a full night (§9). The Settings health panel
-   (listener heartbeat / last capture) is the instrument.
-
-**Then v1** — the actual product thesis, and the first thing that isn't plumbing:
-recurrence engine (EDD §7.1 — pure counting over `item_entities`, no LLM judgement on
-headlines), flag chips on digest items, "What's building" on Home (currently a stub), and the
-one-shot query screen (EDD §7.2, `llama-3.3-70b-versatile` in the spec — **needs replacing,
-Groq is deprecating it; clustering already moved to `openai/gpt-oss-120b`**).
+**The immediate next step is on-device verification, in this order:**
+1. Install, open Settings → **"Build memory from archive"**. Tap once and watch one batch of 12.
+   `adb logcat EntityBackfill:V '*:S'` prints attempted/linked/watermark per batch.
+2. **Hand-check the entities it wrote before letting it drain.** This is the §5.1 discipline: LLM
+   output quality on real notification text is not settled by unit tests. If they look wrong,
+   change `shared/entity-prompt-v1.txt`, `reset()`, and re-run — that is what reset is for.
+   `tools/eval_entities.py` can rehearse the same prompt offline against an export first.
+3. Let it drain (~250 batches, hourly worker, bounded 12/tick), then confirm recurrence chips
+   appear on genuinely recurring stories and "What's building" shows a real entity.
+4. Confirm no clustering regression: `adb logcat GroqCluster:V '*:S'` still prints
+   `LLM ok: N stories → M clusters`.
 
 **Then the 30-day kill-gate** — the real go/no-go, and a *product* question no amount of code
 quality settles: do the recurrence pushes surface things the owner didn't already know?
+Backfill is what lets this be judged on June–August history instead of restarting the clock.
 
 ---
 
 ## 9. OPEN THREADS / TODOs
 
-Blocking the v0 gate / v1:
-- **Overnight listener-survival test** on One UI still never formally confirmed across a full
-  night — **the #1 platform risk**, and the main thing the 3-day v0 gate is for.
-- **Replace `fallbackToDestructiveMigration()` with a real migration** before the 30-day v1
-  accumulation window starts — otherwise a schema change silently wipes the archive that the
-  kill-gate depends on. (Landmine, §6.) The archive now holds real history worth keeping.
-- **`llama-3.3-70b-versatile` (EDD §7.2, the v1 one-shot query) is being deprecated by Groq.**
-  Pick a replacement when building v1 — clustering already moved to `openai/gpt-oss-120b`.
+Blocking the kill-gate:
+- **Nothing in v1 has run on the device.** See §8. The backfill has never made a live Groq call.
+- **Entity extraction quality is unvalidated on real data.** The offline harness
+  (`tools/eval_entities.py`) exists precisely so this can be checked before trusting it; it has
+  not been run against a real export. Its headline metric is **countable share** — the fraction
+  of extracted mentions whose normalised key appears in 2+ digest items. Everything outside it
+  is a row that can never produce a recurrence. Gate around ~40%, then read samples by hand.
 
-Known quality gaps (real, not blocking):
-- **Junk capture rows.** Publisher/account-name-only notifications (e.g. an X post whose
-  title is just "Inc42") still enter the archive as stories. This is a `NotificationExtractor`
-  parse-quality/JUNK-set gap — a *capture-side* bug, not a clustering one. `Deduper` was
-  taught to stop force-merging them (§5.1) but they still show up as items.
-- **Quiet the `NewsListener` debug logging** before declaring v0 final (`GroqCluster` logging
-  is deliberate and useful — keep it until the pipeline is boring).
-- **"What's building"** on Home is a v1 stub (the design itself tags it v1).
+Known gaps (real, not blocking):
+- **"What's building" is not tappable.** The design says tapping opens that signal's cluster;
+  there is no navigation callback and no destination screen yet. A comment marks the spot.
+- **`llama-3.3-70b-versatile` (EDD §7.2, the one-shot query) is being deprecated by Groq.** The
+  query screen is deferred; pick a replacement when building it. `openai/gpt-oss-120b` is the
+  obvious candidate — it is already proven here for both clustering and extraction.
+- **The two eval harnesses are coupled.** `eval_entities.py` imports `eval_clustering.py`, whose
+  module level loads `pipeline-config.json` it never uses. Lift the shared Groq plumbing into
+  `tools/groq_util.py`. Also: `eval_clustering.py` sets `result["tokens"]` on a failed call but
+  never records it into the rate limiter, so failed spend is invisible to pacing —
+  `eval_entities.py` gets this right; copy in that direction.
+- **Harness and app compose batches differently.** The harness orders items by
+  `(digest_id, position, id)` and skips blank headlines; the DAO orders by `di.id`. Per-batch
+  behaviour is identical, but a live run and an eval run won't group the same items.
+- **`docs/Visualizer.html` is not usable as a reference** — a JS bundle, so screen markup isn't
+  greppable. The UI was built from `docs/README.md` prose alone.
+
+Resolved since the last revision: `fallbackToDestructiveMigration()` **removed** (v1 needed no
+migration, so nothing had to be written); junk capture rows now UNPARSEABLE *and* excluded from
+digests; `NewsListener` chatter quieted behind a `VERBOSE` flag (and `onListenerDisconnected`
+added — nothing was reporting the unbind); "What's building" is real.
 
 Open questions:
 - **UNCERTAIN:** whether web/browser push sources are in scope (PRD left this open); whether
