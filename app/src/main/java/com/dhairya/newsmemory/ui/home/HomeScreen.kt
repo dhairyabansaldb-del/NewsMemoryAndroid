@@ -1,5 +1,6 @@
 package com.dhairya.newsmemory.ui.home
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,13 +31,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dhairya.newsmemory.data.db.Digest
 import com.dhairya.newsmemory.pipeline.DigestSlot
 import com.dhairya.newsmemory.memory.BuildingSignal
+import com.dhairya.newsmemory.memory.RecurrenceEngine
 import com.dhairya.newsmemory.pipeline.DigestTimes
 import com.dhairya.newsmemory.ui.components.AlmanacCard
 import com.dhairya.newsmemory.ui.components.SourceMonogram
@@ -221,6 +227,8 @@ private fun NextReadBlock(next: SlotCard?, times: DigestTimes, modifier: Modifie
 @Composable
 private fun WhatsBuilding(signal: BuildingSignal?) {
     val a = LocalAlmanac.current
+    // Read outside the draw lambda: DrawScope is not a composable scope.
+    val highlight = a.highlightBg
     AlmanacCard(fill = a.tintA, modifier = Modifier.fillMaxWidth(), radius = 20) {
         Column(Modifier.padding(15.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -235,10 +243,93 @@ private fun WhatsBuilding(signal: BuildingSignal?) {
                     style = body(12.0), color = a.inkMed
                 )
             } else {
-                // Filled state lands with the UI track (handoff §What's building):
-                // 7x4 dot matrix, entity name with a highlighter swipe, then the counts.
-                Text(signal.entityName, style = body(12.0), color = a.ink)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    DotMatrix(signal.activeDayOffsets)
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            signal.entityName,
+                            style = display(16).copy(
+                                fontSize = 15.5.sp,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = a.ink,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.drawBehind {
+                                // Highlighter swipe, not a full block fill: a marker band across
+                                // the lower part of the line, bleeding slightly past both ends.
+                                drawRect(
+                                    color = highlight,
+                                    topLeft = Offset(-3.dp.toPx(), size.height * 0.34f),
+                                    size = Size(size.width + 6.dp.toPx(), size.height * 0.60f)
+                                )
+                            }
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(buildingCounts(signal), style = body(12.0), color = a.inkMed)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    // Handoff says tapping opens this signal's story cluster. There is no
+                    // navigation callback plumbed through to Home for it yet, so the card is
+                    // presentational — the chevron is drawn but nothing is clickable.
+                    Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = a.inkLow)
+                }
             }
+        }
+    }
+}
+
+/**
+ * The counts line under the entity name — the handoff's "4th day · 8 stories this week"
+ * rhythm, worded for the window the engine actually counts over.
+ *
+ * Both numbers come from [RecurrenceEngine]'s trailing 30-day tally, which is WIDER than the
+ * 28-day matrix — that is why the period reads "this month" and why `dayCount` is text only.
+ * `dayCount` can legitimately exceed `activeDayOffsets.size`; the matrix draws from the
+ * offsets, never from this number.
+ */
+private fun buildingCounts(signal: BuildingSignal): String {
+    val days = "${signal.dayCount} ${if (signal.dayCount == 1) "day" else "days"}"
+    val stories = "${signal.itemCount} ${if (signal.itemCount == 1) "story" else "stories"}"
+    return "$days · $stories this month"
+}
+
+/** The Home sparkline is 7 columns × 4 rows = [RecurrenceEngine.MATRIX_DAYS] days. */
+private const val MATRIX_COLS = 7
+private const val MATRIX_ROWS = 4
+
+/**
+ * The 7×4 dot-matrix sparkline (handoff §What's building): active days r3 in `accent`, the
+ * rest r1.5 in `line2`.
+ *
+ * **Reading direction:** cells run left→right, top→bottom from oldest to newest, the way text
+ * reads. So the TOP-LEFT dot is 27 days back and the BOTTOM-RIGHT dot is TODAY. Each row is a
+ * seven-day stretch and the bottom row is the current one, so the eye finishes reading on
+ * "now" — which is the part the card is about.
+ *
+ * Drawn purely from [BuildingSignal.activeDayOffsets] (0 = today), which the engine has
+ * already bounded to the matrix.
+ */
+@Composable
+private fun DotMatrix(activeDayOffsets: Set<Int>, modifier: Modifier = Modifier) {
+    val a = LocalAlmanac.current
+    val onColor = a.accent
+    val offColor = a.line2
+    Canvas(modifier.size(width = 60.dp, height = 34.dp)) {
+        val cellW = size.width / MATRIX_COLS
+        val cellH = size.height / MATRIX_ROWS
+        for (cell in 0 until RecurrenceEngine.MATRIX_DAYS) {
+            val dayOffset = RecurrenceEngine.MATRIX_DAYS - 1 - cell
+            val active = dayOffset in activeDayOffsets
+            drawCircle(
+                color = if (active) onColor else offColor,
+                radius = if (active) 3.dp.toPx() else 1.5.dp.toPx(),
+                center = Offset(
+                    x = (cell % MATRIX_COLS + 0.5f) * cellW,
+                    y = (cell / MATRIX_COLS + 0.5f) * cellH
+                )
+            )
         }
     }
 }

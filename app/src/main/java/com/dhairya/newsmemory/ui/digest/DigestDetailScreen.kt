@@ -41,8 +41,11 @@ import com.dhairya.newsmemory.data.db.ArchiveDatabase
 import com.dhairya.newsmemory.data.db.Digest
 import com.dhairya.newsmemory.data.db.DigestItem
 import com.dhairya.newsmemory.data.db.RawNotification
+import com.dhairya.newsmemory.memory.RecurrenceEngine
+import com.dhairya.newsmemory.memory.RecurrenceFlag
 import com.dhairya.newsmemory.pipeline.DigestSlot
 import com.dhairya.newsmemory.ui.components.AlmanacCard
+import com.dhairya.newsmemory.ui.components.RecurrenceChip
 import com.dhairya.newsmemory.ui.components.SourceMonogram
 import com.dhairya.newsmemory.ui.theme.Eyebrow
 import com.dhairya.newsmemory.ui.theme.LocalAlmanac
@@ -64,6 +67,14 @@ fun DigestDetailScreen(digestId: String, db: ArchiveDatabase, onBack: () -> Unit
     val digest by produceState<Digest?>(null, digestId) { value = db.digestDao().digest(digestId) }
     val items by produceState(emptyList<DigestItem>(), digestId) { value = db.digestDao().itemsFor(digestId) }
     val expanded = remember { mutableStateMapOf<Long, Boolean>() }
+
+    // Recurrence flags for the WHOLE digest in one pass. `flagsForDigest` batches its entity
+    // lookups internally and evaluates each entity once, so calling it per card would fire the
+    // same queries N times over for identical answers. Most items come back without a flag —
+    // they are capped at MAX_FLAGS_PER_DIGEST and most stories simply do not recur.
+    val flags by produceState(emptyMap<Long, RecurrenceFlag>(), digestId, items) {
+        value = RecurrenceEngine(db.entityDao()).flagsForDigest(digestId, items)
+    }
 
     val dateLabel = remember(digest) {
         digest?.let {
@@ -119,6 +130,7 @@ fun DigestDetailScreen(digestId: String, db: ArchiveDatabase, onBack: () -> Unit
                 StoryCard(
                     item = item,
                     db = db,
+                    flag = flags[item.id],
                     expanded = expanded[item.id] == true,
                     onToggle = { expanded[item.id] = !(expanded[item.id] ?: false) }
                 )
@@ -131,6 +143,8 @@ fun DigestDetailScreen(digestId: String, db: ArchiveDatabase, onBack: () -> Unit
 private fun StoryCard(
     item: DigestItem,
     db: ArchiveDatabase,
+    /** Null for most cards — recurrence is the exception, not the rule. */
+    flag: RecurrenceFlag?,
     expanded: Boolean,
     onToggle: () -> Unit
 ) {
@@ -146,7 +160,17 @@ private fun StoryCard(
             .clickable(onClick = onToggle)
     ) {
         Column(Modifier.padding(15.dp)) {
-            TopicPill(item.topicLabel)
+            // Handoff §Story card: topic pill top-left, optional rec tag top-right.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // fill = false so the pill still hugs its label (it is a pill, not a banner);
+                // the weight only caps it, so a long topic can never squeeze out the chip.
+                TopicPill(item.topicLabel, Modifier.weight(1f, fill = false))
+                if (flag != null) RecurrenceChip(flag.chipLabel)
+            }
             Spacer(Modifier.height(10.dp))
             Text(item.headline, style = display(18).copy(lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified), color = a.ink)
             Spacer(Modifier.height(12.dp))
