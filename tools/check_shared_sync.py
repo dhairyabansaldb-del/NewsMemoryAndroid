@@ -1,16 +1,22 @@
-"""Verify the app and the eval harness really do agree.
+"""Verify the app and the eval harnesses really do agree.
 
-shared/pipeline-config.json + shared/clustering-prompt-v2.txt are the single source
-of truth: a Gradle task generates SharedConfig.kt from them, and the harness reads
-them directly. This script checks the *generated Kotlin* against the values the
-harness actually loads, so a broken codegen (bad escaping, a renamed key, a stale
-build) is caught rather than silently producing an eval that measures a
+shared/pipeline-config.json + shared/clustering-prompt-v2.txt (clustering) and
+shared/entity-config.json + shared/entity-prompt-v1.txt (entity backfill) are the
+single source of truth: a Gradle task generates SharedConfig.kt from all four, and
+the harnesses read them directly. This script checks the *generated Kotlin* against
+the values the harnesses actually load, so a broken codegen (bad escaping, a renamed
+key, a stale build) is caught rather than silently producing an eval that measures a
 configuration the app doesn't ship.
 
     ./gradlew.bat generateSharedConfig     # refresh the generated Kotlin first
     python tools/check_shared_sync.py      # exit 0 = in sync, 1 = divergence
 
-Worth running after touching shared/, the codegen task, or the prompt.
+Worth running after touching shared/, the codegen task, or either prompt.
+
+Adding a const to the codegen without adding a check row here used to be a silent
+hole — the new key simply went unguarded. `unchecked consts` closes it: every
+`const val` (plus STOPWORDS) in the generated file must be read by some row below,
+so forgetting one now fails the check instead of nothing.
 """
 
 import re
@@ -22,9 +28,14 @@ GENERATED = ROOT / "app/build/generated/sharedconfig/com/dhairya/newsmemory/Shar
 
 sys.path.insert(0, str(ROOT / "tools"))
 import eval_clustering as ev  # noqa: E402  (path set above)
+import eval_entities as ee  # noqa: E402  (imports eval_clustering; see tools/README.md)
+
+# Every generated name a check row actually reads — see "unchecked consts" in main().
+READ = set()
 
 
 def kotlin_const(src, name):
+    READ.add(name)
     m = re.search(rf"const val {name}(?::\s*\w+)? = (.+)", src)
     if not m:
         raise SystemExit(f"could not find const {name} in generated Kotlin")
@@ -58,6 +69,7 @@ def main():
 
     stopwords_block = re.search(r"STOPWORDS[^=]*= setOf\((.*?)\)", kt, re.S).group(1)
     kt_stopwords = set(re.findall(r'"([^"]+)"', stopwords_block))
+    READ.add("STOPWORDS")   # read by the regex above, not through kotlin_const
 
     checks = [
         ("clusteringModel", kotlin_const(kt, "CLUSTERING_MODEL").strip('"'), ev.CLUSTERING_MODEL),
@@ -69,6 +81,20 @@ def main():
         ("promptVersion", kotlin_const(kt, "PROMPT_VERSION").strip('"'), ev.SHARED["promptVersion"]),
         ("stopwords", kt_stopwords, ev.STOPWORDS),
         ("systemPrompt", unescape_kotlin_string(kotlin_const(kt, "CLUSTERING_SYSTEM_PROMPT")), ev.PROMPT_V2),
+
+        # --- entity extraction (shared/entity-config.json + the entity prompt) ---
+        ("entity promptVersion", kotlin_const(kt, "ENTITY_PROMPT_VERSION").strip('"'), ee.CFG["promptVersion"]),
+        ("entity entityModel", kotlin_const(kt, "ENTITY_MODEL").strip('"'), ee.ENTITY_MODEL),
+        ("entity reasoningEffort", kotlin_const(kt, "ENTITY_EFFORT").strip('"'), ee.REASONING_EFFORT),
+        ("entity batchSize", int(kotlin_const(kt, "ENTITY_BATCH_SIZE")), ee.BATCH_SIZE),
+        ("entity maxEntitiesPerItem", int(kotlin_const(kt, "ENTITY_MAX_PER_ITEM")), ee.MAX_ENTITIES),
+        ("entity tpmBudget", int(kotlin_const(kt, "ENTITY_TPM_BUDGET")), ee.TPM_BUDGET),
+        ("entity completionBase", int(kotlin_const(kt, "ENTITY_COMPLETION_BASE")), ee.COMPLETION_BASE),
+        ("entity completionPerItem", int(kotlin_const(kt, "ENTITY_COMPLETION_PER_ITEM")), ee.COMPLETION_PER_ITEM),
+        ("entity minCompletionTokens", int(kotlin_const(kt, "ENTITY_MIN_COMPLETION_TOKENS")),
+         ee.MIN_COMPLETION_TOKENS),
+        ("entity bodyChars", int(kotlin_const(kt, "ENTITY_BODY_CHARS")), ee.BODY_CHARS),
+        ("entity systemPrompt", unescape_kotlin_string(kotlin_const(kt, "ENTITY_SYSTEM_PROMPT")), ee.PROMPT),
     ]
 
     failures = 0
@@ -90,6 +116,14 @@ def main():
                     break
         else:
             print(f"      kotlin={from_kotlin!r}  python={from_python!r}")
+
+    # A generated const with no check row is unguarded config — the drift this whole file
+    # exists to catch, arriving through the one door it used to leave open.
+    unchecked = sorted(set(re.findall(r"const val (\w+)", kt)) - READ)
+    if unchecked:
+        failures += 1
+        print(f"  UNCHECKED {', '.join(unchecked)}")
+        print("      generated but never compared — add a row to `checks` above")
 
     print()
     if failures:

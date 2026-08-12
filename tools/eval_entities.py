@@ -37,9 +37,11 @@ output for the report's benefit only. Heuristic-mode digests label items with a 
 top-TF token ("Dropping", "Kishans"), and feeding that in would inject exactly the kind
 of junk this prompt is built to reject.
 
-Configuration lives in shared/entity-config.json + shared/entity-prompt-v1.txt.
-Those are NOT yet wired into the Gradle codegen (see the comment in the config) —
-there is no Kotlin entity path to keep in sync yet.
+Configuration lives in shared/entity-config.json + shared/entity-prompt-v1.txt, both
+of which the Gradle codegen now emits as `SharedConfig.ENTITY_*` for the app's own
+extractor (`llm/EntityExtractor.kt`). `tools/check_shared_sync.py` compares the two.
+**Keep the batching, prompt assembly and response parsing here in step with that
+Kotlin** — a harness that has drifted is measuring an app you don't ship.
 """
 
 import argparse

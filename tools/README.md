@@ -237,17 +237,24 @@ clustering-v2 merge was hand-checked before it shipped. `--sample-filter junk` a
 `--sample-filter zero` narrow it to the two places quality actually breaks: things it
 should not have extracted, and things it should have.
 
-## Config, and what is NOT wired up yet
+## Config, and what reads it
 
 `shared/entity-config.json` (model, effort, batch size, token budget) and
 `shared/entity-prompt-v1.txt` (the prompt).
 
-**Neither is in the Gradle codegen, and neither is checked by `check_shared_sync.py`** —
-on purpose. There is no Kotlin entity-extraction path yet, so there is nothing to stay in
-sync with, and wiring a prompt into the build before it has passed its quality gate buys
-build coupling for nothing. When the backfill actually ships, fold these keys into
-`GenerateSharedConfig` and add them to `check_shared_sync.py` the same way clustering's
-are — `shared/` stays the single source of truth the moment two languages read it.
+**Both are now in the Gradle codegen and both are checked by `check_shared_sync.py`** —
+the app grew an entity path (`llm/EntityExtractor.kt`, driven by `memory/EntityBackfill.kt`),
+so there are two languages reading these files and `shared/` is the only thing keeping them
+honest. `GenerateSharedConfig` emits them as `SharedConfig.ENTITY_*` consts; the sync check
+compares the generated Kotlin against what this harness loads, and now also fails on any
+generated const that has no check row at all.
+
+What that buys, and what it costs you: change a value here and both the app and this
+harness pick it up — but the Kotlin mirrors this file's `build_user`, `pick_snippet`,
+`plan_batch` and `parse_entities` **by hand**, and `check_shared_sync.py` cannot see a
+logic divergence. If you change how a batch is assembled or a response is read, change
+`llm/EntityExtractor.kt`, `llm/prompts/EntityPrompt.kt` and `llm/EntityResponseParser.kt`
+with it. (Same standing caveat as the clustering ports: shared values, hand-ported logic.)
 
 `shared/pipeline-config.json` is untouched by any of this.
 

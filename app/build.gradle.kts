@@ -64,14 +64,21 @@ ksp {
 }
 
 /**
- * Generates SharedConfig.kt from shared/pipeline-config.json + the prompt file, so the
- * app and the offline eval harness (tools/eval_clustering.py) read ONE source of truth.
+ * Generates SharedConfig.kt from shared/pipeline-config.json + shared/entity-config.json
+ * and their prompt files, so the app and the offline eval harnesses
+ * (tools/eval_clustering.py, tools/eval_entities.py) read ONE source of truth.
  * Generating at build time keeps these compile-time constants — no runtime parsing on
- * the digest path — while the harness reads the same JSON directly at run time.
+ * the digest path — while the harnesses read the same JSON directly at run time.
+ *
+ * Both config/prompt pairs are declared as separate @InputFiles rather than a file
+ * collection: each is named, so a rename fails the build instead of silently generating
+ * a file with a missing const.
  */
 abstract class GenerateSharedConfig : DefaultTask() {
     @get:InputFile abstract val configJson: RegularFileProperty
     @get:InputFile abstract val promptFile: RegularFileProperty
+    @get:InputFile abstract val entityConfigJson: RegularFileProperty
+    @get:InputFile abstract val entityPromptFile: RegularFileProperty
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
     /**
@@ -93,7 +100,10 @@ abstract class GenerateSharedConfig : DefaultTask() {
     fun generate() {
         @Suppress("UNCHECKED_CAST")
         val cfg = JsonSlurper().parse(configJson.get().asFile) as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val ent = JsonSlurper().parse(entityConfigJson.get().asFile) as Map<String, Any>
         val prompt = promptFile.get().asFile.readText().trimEnd()
+        val entityPrompt = entityPromptFile.get().asFile.readText().trimEnd()
         val stopwords = (cfg["stopwords"] as List<*>).joinToString(", ") { "\"$it\"" }
 
         val dir = outputDir.get().asFile.resolve("com/dhairya/newsmemory")
@@ -104,7 +114,8 @@ abstract class GenerateSharedConfig : DefaultTask() {
 
             // GENERATED at build time — DO NOT EDIT.
             // Source: shared/pipeline-config.json + shared/${cfg["promptFile"]}
-            // Edit those instead; the eval harness reads the same files.
+            //         shared/entity-config.json  + shared/${ent["promptFile"]}
+            // Edit those instead; the eval harnesses read the same files.
             object SharedConfig {
                 const val PROMPT_VERSION = "${cfg["promptVersion"]}"
                 const val CLUSTERING_MODEL = "${cfg["clusteringModel"]}"
@@ -115,6 +126,19 @@ abstract class GenerateSharedConfig : DefaultTask() {
                 const val JACCARD_THRESHOLD = ${cfg["jaccardThreshold"]}
                 val STOPWORDS: Set<String> = setOf($stopwords)
                 const val CLUSTERING_SYSTEM_PROMPT: String = "${esc(prompt)}"
+
+                // Entity extraction (the backfill path) — shared/entity-config.json.
+                const val ENTITY_PROMPT_VERSION = "${ent["promptVersion"]}"
+                const val ENTITY_MODEL = "${ent["entityModel"]}"
+                const val ENTITY_EFFORT = "${ent["reasoningEffort"]}"
+                const val ENTITY_BATCH_SIZE = ${ent["batchSize"]}
+                const val ENTITY_MAX_PER_ITEM = ${ent["maxEntitiesPerItem"]}
+                const val ENTITY_TPM_BUDGET = ${ent["tpmBudget"]}
+                const val ENTITY_COMPLETION_BASE = ${ent["completionBase"]}
+                const val ENTITY_COMPLETION_PER_ITEM = ${ent["completionPerItem"]}
+                const val ENTITY_MIN_COMPLETION_TOKENS = ${ent["minCompletionTokens"]}
+                const val ENTITY_BODY_CHARS = ${ent["bodyChars"]}
+                const val ENTITY_SYSTEM_PROMPT: String = "${esc(entityPrompt)}"
             }
             """.trimIndent() + "\n"
         )
@@ -124,6 +148,8 @@ abstract class GenerateSharedConfig : DefaultTask() {
 val generateSharedConfig = tasks.register<GenerateSharedConfig>("generateSharedConfig") {
     configJson.set(rootProject.file("shared/pipeline-config.json"))
     promptFile.set(rootProject.file("shared/clustering-prompt-v2.txt"))
+    entityConfigJson.set(rootProject.file("shared/entity-config.json"))
+    entityPromptFile.set(rootProject.file("shared/entity-prompt-v1.txt"))
     outputDir.set(layout.buildDirectory.dir("generated/sharedconfig"))
 }
 
