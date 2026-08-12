@@ -5,7 +5,9 @@ import androidx.test.core.app.ApplicationProvider
 import com.dhairya.newsmemory.data.NotificationRepository
 import com.dhairya.newsmemory.data.SettingsStore
 import com.dhairya.newsmemory.data.db.ArchiveDatabase
+import com.dhairya.newsmemory.data.db.RawNotification
 import com.dhairya.newsmemory.testing.inMemoryArchive
+import com.dhairya.newsmemory.util.Normalizer
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -48,6 +50,41 @@ class DigestPipelineTest {
         repo.insertRaw("com.news.c", "FII selling drags Sensex down 800 points", null, millisAt(12, 0))
         repo.insertRaw("com.news.a", "ISRO announces Gaganyaan launch date", null, millisAt(13, 0))
         repo.insertRaw("com.news.b", "Monsoon arrives early in Kerala this year", null, millisAt(14, 0))
+    }
+
+    @Test
+    fun `unparseable rows stay in the archive but never become stories`() = runTest {
+        seedEveningWindow()
+        // A junk capture: the "headline" is only an account name, so the extractor marked it
+        // UNPARSEABLE. It must survive in raw_notifications (immutable record) and be absent
+        // from the digest — otherwise it becomes an entity that recurs every single day.
+        db.rawNotificationDao().insert(
+            RawNotification(
+                packageName = "com.twitter.android",
+                publisher = "Inc42",
+                title = "Inc42",
+                body = null,
+                parseQuality = "UNPARSEABLE",
+                contentHash = Normalizer.contentHash("Inc42", null),
+                postedAt = millisAt(15, 0),
+                capturedAt = millisAt(15, 0),
+                windowBucket = "2026-06-10-E"
+            )
+        )
+
+        pipeline.runForWindow("2026-06-10-E")
+
+        val digest = db.digestDao().digest("2026-06-10-E")!!
+        assertEquals(3, digest.itemCount)        // unchanged by the junk row
+        assertEquals(3, digest.sourceCount)      // "Inc42" must not count as a fourth source
+
+        val headlines = db.digestDao().itemsFor("2026-06-10-E").map { it.headline }
+        assertTrue(headlines.none { it.contains("Inc42") })
+
+        // Still captured, and still assigned to the window it fell in.
+        val raw = db.rawNotificationDao().inWindow(0, Long.MAX_VALUE).first { it.title == "Inc42" }
+        assertEquals("UNPARSEABLE", raw.parseQuality)
+        assertEquals("2026-06-10-E", raw.windowId)
     }
 
     @Test

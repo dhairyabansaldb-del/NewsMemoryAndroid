@@ -1,6 +1,7 @@
 package com.dhairya.newsmemory.pipeline
 
 import androidx.room.withTransaction
+import com.dhairya.newsmemory.capture.ParseQuality
 import com.dhairya.newsmemory.data.SettingsStore
 import com.dhairya.newsmemory.data.db.ArchiveDatabase
 import com.dhairya.newsmemory.data.db.Digest
@@ -40,8 +41,18 @@ class DigestPipeline(
 
         val rows = db.rawNotificationDao().inWindow(start, end)
 
+        // The archive keeps everything it captured — it is the immutable record. A digest is a
+        // presentation of it, and a row we could not resolve a headline from has nothing to
+        // present: its "headline" would be a publisher or account name. Those are dropped here
+        // rather than at capture so the raw payload survives for any future re-derivation.
+        //
+        // This also protects v1: recurrence counts entities extracted from item headlines, and
+        // an account name recurs every single day, so a junk row admitted here would outrank
+        // every real story in the memory layer.
+        val presentable = rows.filter { it.parseQuality != ParseQuality.UNPARSEABLE.name }
+
         // Stage 2: near-dup merge (exact dupes are already gone at insert time)
-        val stories = Deduper.merge(rows)
+        val stories = Deduper.merge(presentable)
 
         // Stage 3: clustering — LLM with heuristic fallback (Phase 5), heuristic-only today
         val result = if (stories.isEmpty()) {
@@ -61,7 +72,7 @@ class DigestPipeline(
             windowEnd = end,
             createdAt = now,
             itemCount = orderedClusters.size,
-            sourceCount = rows.map { it.publisher ?: it.packageName }.distinct().size,
+            sourceCount = presentable.map { it.publisher ?: it.packageName }.distinct().size,
             pipelineMode = result.mode
         )
 
