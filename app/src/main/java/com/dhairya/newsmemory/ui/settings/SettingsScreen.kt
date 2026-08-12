@@ -61,7 +61,9 @@ data class BackfillStatus(
     val remaining: Int,
     val running: Boolean,
     /** False when no Groq key is configured — the row is shown, but inert. */
-    val available: Boolean
+    val available: Boolean,
+    /** Last attempt couldn't reach Groq. Shown rather than logged: degradation is never silent. */
+    val lastFailed: Boolean = false
 ) {
     val actionable: Boolean get() = available && !running && remaining > 0
 
@@ -70,6 +72,8 @@ data class BackfillStatus(
             !available -> "Needs API key"
             running -> "Working…"
             remaining == 0 -> "Up to date"
+            // Without this the row reads "3000 to go" forever while nothing is happening.
+            lastFailed -> "Couldn't reach Groq · $remaining left"
             else -> "$remaining to go"
         }
 }

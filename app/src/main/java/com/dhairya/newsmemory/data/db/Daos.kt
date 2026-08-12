@@ -214,20 +214,6 @@ interface EntityDao {
     suspend fun allRefs(): List<ItemEntityCrossRef>
 
     /**
-     * Digest items anywhere in the archive with no linked entities (heuristic-mode backfill,
-     * EDD §7.3). Bounded: backfill drains in batches so it never fires an unbounded number of
-     * extraction calls in one pass. Oldest first, so history fills in chronologically.
-     */
-    @Query(
-        """SELECT di.* FROM digest_items di
-           LEFT JOIN item_entities ie ON ie.item_id = di.id
-           WHERE ie.item_id IS NULL
-           ORDER BY di.id
-           LIMIT :limit"""
-    )
-    suspend fun itemsWithoutEntities(limit: Int): List<DigestItem>
-
-    /**
      * The next batch to attempt extraction on: unlinked items above the watermark.
      *
      * `id > :afterId` is what makes backfill terminate. Filtering on "has no entities" alone
@@ -250,12 +236,4 @@ interface EntityDao {
            WHERE ie.item_id IS NULL AND di.id > :afterId"""
     )
     suspend fun itemsRemainingAfter(afterId: Long): Int
-
-    /** How much of the archive still needs backfilling — drives the Settings progress copy. */
-    @Query(
-        """SELECT COUNT(*) FROM digest_items di
-           LEFT JOIN item_entities ie ON ie.item_id = di.id
-           WHERE ie.item_id IS NULL"""
-    )
-    suspend fun itemsWithoutEntitiesCount(): Int
 }

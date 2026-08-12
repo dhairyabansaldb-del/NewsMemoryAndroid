@@ -165,6 +165,7 @@ private fun NewsMemoryApp(container: AppContainer, pendingDigestId: String?, onC
     // Entity backfill progress. `backfillTick` re-reads the count after a run without needing
     // the engine to expose a Flow — the count only changes when we ourselves change it.
     var backfillRunning by remember { mutableStateOf(false) }
+    var backfillFailed by remember { mutableStateOf(false) }
     var backfillTick by remember { mutableIntStateOf(0) }
     val backfillRemaining by produceState(initialValue = 0, backfillTick, allDigests.size) {
         value = runCatching { container.entityBackfill.remaining() }.getOrDefault(0)
@@ -273,14 +274,17 @@ private fun NewsMemoryApp(container: AppContainer, pendingDigestId: String?, onC
                     backfill = BackfillStatus(
                         remaining = backfillRemaining,
                         running = backfillRunning,
-                        available = container.entityBackfill.available
+                        available = container.entityBackfill.available,
+                        lastFailed = backfillFailed
                     ),
                     onRunBackfill = {
                         scope.launch {
                             backfillRunning = true
                             // One bounded batch per tap. The hourly worker drains the rest, so
                             // this never becomes a long-running foreground job.
-                            runCatching { container.entityBackfill.runBatch() }
+                            val outcome = runCatching { container.entityBackfill.runBatch() }
+                            backfillFailed =
+                                outcome.getOrNull()?.failed ?: outcome.isFailure
                             backfillRunning = false
                             backfillTick++
                         }

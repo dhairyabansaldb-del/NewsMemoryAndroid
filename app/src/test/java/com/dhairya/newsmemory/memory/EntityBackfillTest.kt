@@ -148,7 +148,9 @@ class EntityBackfillTest {
 
         val failed = backfill.runBatch()
 
-        assertEquals(EntityBackfill.BatchOutcome(0, 0, 2), failed)
+        // failed = true is what distinguishes this from an empty queue: both are (0, 0, n), and
+        // without the flag Settings would report "2 to go" forever while nothing was happening.
+        assertEquals(EntityBackfill.BatchOutcome(0, 0, 2, failed = true), failed)
         assertEquals(0L, settings.backfillWatermarkSnapshot())
         assertTrue(db.entityDao().allRefs().isEmpty())
         assertEquals(ids, unattempted())

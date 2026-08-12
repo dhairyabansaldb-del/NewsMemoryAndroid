@@ -31,8 +31,20 @@ class EntityBackfill(
     private val log: (String) -> Unit = {}
 ) {
 
-    /** What one batch did. `attempted` counts items sent; `linked` counts (item, entity) rows. */
-    data class BatchOutcome(val attempted: Int, val linked: Int, val remaining: Int)
+    /**
+     * What one batch did. `attempted` counts items sent; `linked` counts (item, entity) rows.
+     *
+     * `failed` exists because without it a failed batch and an empty queue are indistinguishable
+     * — both are (0, 0, remaining) — and a backfill that can never reach Groq would sit there
+     * reporting "3000 to go" forever. Degradation is never silent in this app (§4.2); that rule
+     * is exactly what the permanent-heuristic-fallback bug taught (§5.1).
+     */
+    data class BatchOutcome(
+        val attempted: Int,
+        val linked: Int,
+        val remaining: Int,
+        val failed: Boolean = false
+    )
 
     /** False when no Groq key is configured — Settings shows the control as unavailable. */
     val available: Boolean get() = extract != null
@@ -42,8 +54,13 @@ class EntityBackfill(
         db.entityDao().itemsRemainingAfter(settings.backfillWatermarkSnapshot())
 
     /**
-     * Re-run everything from the start. The reason to do this is a changed extraction prompt:
-     * items that previously extracted to zero deserve another look under new wording.
+     * Re-offer every item extraction has so far produced NOTHING for — worth doing after changing
+     * the prompt, since items that extracted to zero deserve another look under new wording.
+     *
+     * Note this is NOT "re-run everything": items that already got entities are excluded by the
+     * query's `ie.item_id IS NULL`, so a prompt change can never revise them. Revising those
+     * would mean deleting existing item_entities rows, which is destructive and deliberately not
+     * offered here.
      */
     suspend fun reset() = settings.resetBackfillWatermark()
 
@@ -75,7 +92,7 @@ class EntityBackfill(
         } catch (e: Exception) {
             log("batch of ${items.size} failed (${e.javaClass.simpleName}: ${e.message}) " +
                 "— watermark held at $watermark, retrying next tick")
-            return BatchOutcome(0, 0, remaining())
+            return BatchOutcome(0, 0, remaining(), failed = true)
         }
 
         // Same write path as the LLM clustering digest (DigestPipeline): upsert on the
