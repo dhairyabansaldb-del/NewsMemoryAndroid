@@ -20,10 +20,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.WbTwilight
-import androidx.compose.material.icons.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -55,6 +56,24 @@ data class HealthStatus(
     val batteryUnrestricted: Boolean
 )
 
+/** Entity-backfill progress, phrased for a person rather than as a row count. */
+data class BackfillStatus(
+    val remaining: Int,
+    val running: Boolean,
+    /** False when no Groq key is configured — the row is shown, but inert. */
+    val available: Boolean
+) {
+    val actionable: Boolean get() = available && !running && remaining > 0
+
+    val summary: String
+        get() = when {
+            !available -> "Needs API key"
+            running -> "Working…"
+            remaining == 0 -> "Up to date"
+            else -> "$remaining to go"
+        }
+}
+
 @Composable
 fun SettingsScreen(
     themeMode: ThemeMode,
@@ -64,7 +83,9 @@ fun SettingsScreen(
     allowlistSize: Int,
     health: HealthStatus,
     onOpenAllowlist: () -> Unit,
-    onExport: () -> Unit
+    onExport: () -> Unit,
+    backfill: BackfillStatus,
+    onRunBackfill: () -> Unit
 ) {
     val a = LocalAlmanac.current
     var editing by remember { mutableStateOf<Int?>(null) }   // 0=morning 1=evening 2=night
@@ -104,6 +125,16 @@ fun SettingsScreen(
                 NavRow(Icons.Filled.Layers, "Listening to", "$allowlistSize apps", onOpenAllowlist)
                 Divider()
                 NavRow(Icons.Filled.Download, "Export archive (JSON)", null, onExport)
+                Divider()
+                // Backfill reads the archive's older digests and gives them the entities that
+                // recurrence counts over. Manual because it spends API quota — it also drains
+                // on its own in the background, an hour at a time.
+                NavRow(
+                    Icons.Filled.History,
+                    "Build memory from archive",
+                    backfill.summary,
+                    onClick = if (backfill.actionable) onRunBackfill else null
+                )
             }
 
             Group("HEALTH") {
@@ -199,22 +230,32 @@ private fun TimeRow(icon: ImageVector, label: String, minutes: Int, onClick: () 
         Text(label, style = body(14.0), color = a.ink, modifier = Modifier.weight(1f))
         Text(fmt(minutes), style = display(16), color = a.inkMed)
         Spacer(Modifier.size(6.dp))
-        Icon(Icons.Outlined.KeyboardArrowRight, null, tint = a.inkLow)
+        Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = a.inkLow)
     }
 }
 
 @Composable
-private fun NavRow(icon: ImageVector, label: String, value: String?, onClick: () -> Unit) {
+private fun NavRow(icon: ImageVector, label: String, value: String?, onClick: (() -> Unit)?) {
     val a = LocalAlmanac.current
+    // A null onClick means the row is informational: no ripple, no chevron, dimmed label.
+    val enabled = onClick != null
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 13.dp),
+        Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, null, tint = a.inkMed, modifier = Modifier.size(17.dp))
+        Icon(icon, null, tint = if (enabled) a.inkMed else a.inkLow, modifier = Modifier.size(17.dp))
         Spacer(Modifier.size(12.dp))
-        Text(label, style = body(14.0), color = a.ink, modifier = Modifier.weight(1f))
+        Text(
+            label,
+            style = body(14.0),
+            color = if (enabled) a.ink else a.inkLow,
+            modifier = Modifier.weight(1f)
+        )
         value?.let { Text(it, style = display(13), color = a.inkMed); Spacer(Modifier.size(6.dp)) }
-        Icon(Icons.Outlined.KeyboardArrowRight, null, tint = a.inkLow)
+        if (enabled) Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = a.inkLow)
     }
 }
 

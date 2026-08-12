@@ -43,6 +43,7 @@ class SettingsStore(private val context: Context) {
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         val LIMITED_SUPPORT = stringSetPreferencesKey("limited_support_packages")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val BACKFILL_WATERMARK = longPreferencesKey("entity_backfill_watermark")
     }
 
     // --- Allowlist ---
@@ -124,5 +125,31 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setThemeMode(mode: String) {
         context.dataStore.edit { it[Keys.THEME_MODE] = mode }
+    }
+
+    // --- Entity backfill progress (EDD §7.3) ---
+    //
+    // The highest digest_item id extraction has been ATTEMPTED for. Progress can't be inferred
+    // from "has entities yet", because zero entities is a correct and common answer — teasers,
+    // app promos and junk headlines legitimately yield none, so those rows would look unstarted
+    // forever and be re-extracted on every run, burning quota indefinitely.
+    //
+    // A watermark rather than a table: digest_item ids are autoincrement, so "already attempted"
+    // is exactly "id <= watermark". That keeps the archive at schema v2 with no migration, which
+    // matters now that the destructive fallback is gone. Reset it to 0 to re-run everything —
+    // which is what you want after changing the extraction prompt.
+
+    val backfillWatermark: Flow<Long> =
+        context.dataStore.data.map { it[Keys.BACKFILL_WATERMARK] ?: 0L }
+
+    suspend fun backfillWatermarkSnapshot(): Long = backfillWatermark.first()
+
+    /** Advance only after a batch actually succeeded, so a failed call is retried, not skipped. */
+    suspend fun setBackfillWatermark(itemId: Long) {
+        context.dataStore.edit { it[Keys.BACKFILL_WATERMARK] = itemId }
+    }
+
+    suspend fun resetBackfillWatermark() {
+        context.dataStore.edit { it[Keys.BACKFILL_WATERMARK] = 0L }
     }
 }

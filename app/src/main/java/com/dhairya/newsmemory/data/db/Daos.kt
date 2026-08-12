@@ -227,6 +227,30 @@ interface EntityDao {
     )
     suspend fun itemsWithoutEntities(limit: Int): List<DigestItem>
 
+    /**
+     * The next batch to attempt extraction on: unlinked items above the watermark.
+     *
+     * `id > :afterId` is what makes backfill terminate. Filtering on "has no entities" alone
+     * would re-offer every item that legitimately extracted to zero entities — a correct and
+     * common outcome — so the job would never finish.
+     */
+    @Query(
+        """SELECT di.* FROM digest_items di
+           LEFT JOIN item_entities ie ON ie.item_id = di.id
+           WHERE ie.item_id IS NULL AND di.id > :afterId
+           ORDER BY di.id
+           LIMIT :limit"""
+    )
+    suspend fun itemsWithoutEntitiesAfter(afterId: Long, limit: Int): List<DigestItem>
+
+    /** Items still unattempted — drives the Settings progress copy, and stops at 0. */
+    @Query(
+        """SELECT COUNT(*) FROM digest_items di
+           LEFT JOIN item_entities ie ON ie.item_id = di.id
+           WHERE ie.item_id IS NULL AND di.id > :afterId"""
+    )
+    suspend fun itemsRemainingAfter(afterId: Long): Int
+
     /** How much of the archive still needs backfilling — drives the Settings progress copy. */
     @Query(
         """SELECT COUNT(*) FROM digest_items di

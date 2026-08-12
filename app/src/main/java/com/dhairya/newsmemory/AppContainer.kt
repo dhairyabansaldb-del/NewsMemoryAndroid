@@ -7,6 +7,7 @@ import com.dhairya.newsmemory.data.SettingsStore
 import com.dhairya.newsmemory.data.db.ArchiveDatabase
 import com.dhairya.newsmemory.llm.GroqClient
 import com.dhairya.newsmemory.llm.GroqClusterEngine
+import com.dhairya.newsmemory.memory.EntityBackfill
 import com.dhairya.newsmemory.memory.RecurrenceEngine
 import com.dhairya.newsmemory.pipeline.ClusterResult
 import com.dhairya.newsmemory.pipeline.Deduper
@@ -47,4 +48,17 @@ class AppContainer(private val context: Context) {
 
     /** v1 memory layer. Pure counting over the archive — no Groq client by design. */
     val recurrenceEngine: RecurrenceEngine by lazy { RecurrenceEngine(database.entityDao()) }
+
+    /**
+     * Entity backfill for the historical archive (EDD §7.3). Extraction is null without a key,
+     * which Settings surfaces as unavailable rather than failing silently.
+     */
+    val entityBackfill: EntityBackfill by lazy {
+        EntityBackfill(
+            db = database,
+            settings = settingsStore,
+            extract = null,   // wired to the extractor in the backfill track
+            log = { msg -> Log.d("EntityBackfill", msg) }
+        )
+    }
 }

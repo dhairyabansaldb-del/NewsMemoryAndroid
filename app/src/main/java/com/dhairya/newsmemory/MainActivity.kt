@@ -30,7 +30,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -64,6 +66,8 @@ import com.dhairya.newsmemory.ui.digest.DigestDetailScreen
 import com.dhairya.newsmemory.ui.home.HomeScreen
 import com.dhairya.newsmemory.ui.home.SlotCard
 import com.dhairya.newsmemory.ui.onboarding.OnboardingScreen
+import com.dhairya.newsmemory.memory.BuildingSignal
+import com.dhairya.newsmemory.ui.settings.BackfillStatus
 import com.dhairya.newsmemory.ui.settings.HealthStatus
 import com.dhairya.newsmemory.ui.settings.SettingsScreen
 import com.dhairya.newsmemory.ui.theme.LocalAlmanac
@@ -152,6 +156,20 @@ private fun NewsMemoryApp(container: AppContainer, pendingDigestId: String?, onC
     val topicCounts = todayItems.groupingBy { it.topicLabel }.eachCount()
         .entries.sortedByDescending { it.value }.take(5).map { it.key to it.value }
 
+    // "What's building": recomputed when the archive changes rather than on every recomposition.
+    // Counting queries, no network — see RecurrenceEngine.
+    val building by produceState<BuildingSignal?>(initialValue = null, allDigests.size) {
+        value = runCatching { container.recurrenceEngine.building(limit = 1).firstOrNull() }.getOrNull()
+    }
+
+    // Entity backfill progress. `backfillTick` re-reads the count after a run without needing
+    // the engine to expose a Flow — the count only changes when we ourselves change it.
+    var backfillRunning by remember { mutableStateOf(false) }
+    var backfillTick by remember { mutableIntStateOf(0) }
+    val backfillRemaining by produceState(initialValue = 0, backfillTick, allDigests.size) {
+        value = runCatching { container.entityBackfill.remaining() }.getOrDefault(0)
+    }
+
     // App labels for the listening strip monograms (cheap for a handful of packages)
     val listeningLabels = remember(allowlist) {
         allowlist.mapNotNull { pkg ->
@@ -226,6 +244,7 @@ private fun NewsMemoryApp(container: AppContainer, pendingDigestId: String?, onC
                     dateLabel = LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, d MMMM")),
                     slotCards = slotCards, times = times, topicCounts = topicCounts,
                     listeningCount = allowlist.size, listeningLabels = listeningLabels,
+                    building = building,
                     onOpenDigest = { nav.navigate(Routes.digest(it)) },
                     onEditAllowlist = { nav.navigate(Routes.ALLOWLIST) }
                 )
@@ -250,7 +269,22 @@ private fun NewsMemoryApp(container: AppContainer, pendingDigestId: String?, onC
                     allowlistSize = allowlist.size,
                     health = HealthStatus(minsAgo(lastAlive), minsAgo(lastCaptured), batteryOk),
                     onOpenAllowlist = { nav.navigate(Routes.ALLOWLIST) },
-                    onExport = { exportLauncher.launch(ArchiveExporter.suggestedFileName()) }
+                    onExport = { exportLauncher.launch(ArchiveExporter.suggestedFileName()) },
+                    backfill = BackfillStatus(
+                        remaining = backfillRemaining,
+                        running = backfillRunning,
+                        available = container.entityBackfill.available
+                    ),
+                    onRunBackfill = {
+                        scope.launch {
+                            backfillRunning = true
+                            // One bounded batch per tap. The hourly worker drains the rest, so
+                            // this never becomes a long-running foreground job.
+                            runCatching { container.entityBackfill.runBatch() }
+                            backfillRunning = false
+                            backfillTick++
+                        }
+                    }
                 )
             }
             composable(

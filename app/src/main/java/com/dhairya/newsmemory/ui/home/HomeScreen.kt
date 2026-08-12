@@ -23,7 +23,7 @@ import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.WbTwilight
-import androidx.compose.material.icons.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dhairya.newsmemory.data.db.Digest
 import com.dhairya.newsmemory.pipeline.DigestSlot
+import com.dhairya.newsmemory.memory.BuildingSignal
 import com.dhairya.newsmemory.pipeline.DigestTimes
 import com.dhairya.newsmemory.ui.components.AlmanacCard
 import com.dhairya.newsmemory.ui.components.SourceMonogram
@@ -68,6 +69,8 @@ fun HomeScreen(
     topicCounts: List<Pair<String, Int>>,
     listeningCount: Int,
     listeningLabels: List<String>,
+    /** Null until the archive has enough history to have noticed anything recurring. */
+    building: BuildingSignal?,
     onOpenDigest: (String) -> Unit,
     onEditAllowlist: () -> Unit
 ) {
@@ -125,7 +128,7 @@ fun HomeScreen(
             NextReadBlock(next = next, times = times, modifier = Modifier.weight(1f))
         }
 
-        WhatsBuilding()
+        WhatsBuilding(building)
 
         ThreeReads(slotCards = slotCards, onOpenDigest = onOpenDigest)
 
@@ -216,19 +219,26 @@ private fun NextReadBlock(next: SlotCard?, times: DigestTimes, modifier: Modifie
 }
 
 @Composable
-private fun WhatsBuilding() {
+private fun WhatsBuilding(signal: BuildingSignal?) {
     val a = LocalAlmanac.current
     AlmanacCard(fill = a.tintA, modifier = Modifier.fillMaxWidth(), radius = 20) {
         Column(Modifier.padding(15.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("WHAT'S BUILDING", style = Eyebrow, color = a.inkMed, modifier = Modifier.weight(1f))
-                Text("V1 · MEMORY", style = Eyebrow.copy(fontSize = 9.sp), color = a.faint)
             }
             Spacer(Modifier.height(8.dp))
-            Text(
-                "Recurrence tracking arrives in v1 — once a few weeks of archive build up, the stories that keep returning surface here.",
-                style = body(12.0), color = a.inkMed
-            )
+            if (signal == null) {
+                // Not a "coming soon" notice any more: the engine is live and has simply not
+                // seen the same subject often enough yet.
+                Text(
+                    "Nothing recurring yet — the stories that keep returning will surface here once the archive has seen them a few times.",
+                    style = body(12.0), color = a.inkMed
+                )
+            } else {
+                // Filled state lands with the UI track (handoff §What's building):
+                // 7x4 dot matrix, entity name with a highlighter swipe, then the counts.
+                Text(signal.entityName, style = body(12.0), color = a.ink)
+            }
         }
     }
 }
@@ -291,6 +301,6 @@ private fun ListeningStrip(count: Int, labels: List<String>, onClick: () -> Unit
             "Listening to $count ${if (count == 1) "source" else "sources"}",
             style = body(12.0), color = a.inkMed, modifier = Modifier.weight(1f)
         )
-        Icon(Icons.Outlined.KeyboardArrowRight, null, tint = a.inkLow)
+        Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = a.inkLow)
     }
 }

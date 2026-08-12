@@ -18,8 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.KeyboardArrowLeft
-import androidx.compose.material.icons.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -152,7 +152,7 @@ private fun CalendarCard(
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    Icons.Outlined.KeyboardArrowLeft, "Previous month", tint = a.ink,
+                    Icons.AutoMirrored.Outlined.KeyboardArrowLeft, "Previous month", tint = a.ink,
                     modifier = Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onPrev)
                 )
                 Text(
@@ -160,7 +160,7 @@ private fun CalendarCard(
                     textAlign = TextAlign.Center, modifier = Modifier.weight(1f)
                 )
                 Icon(
-                    Icons.Outlined.KeyboardArrowRight, "Next month", tint = a.ink,
+                    Icons.AutoMirrored.Outlined.KeyboardArrowRight, "Next month", tint = a.ink,
                     modifier = Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onNext)
                 )
             }
