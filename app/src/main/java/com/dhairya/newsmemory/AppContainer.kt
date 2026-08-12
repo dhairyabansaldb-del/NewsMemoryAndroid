@@ -5,6 +5,7 @@ import android.util.Log
 import com.dhairya.newsmemory.data.NotificationRepository
 import com.dhairya.newsmemory.data.SettingsStore
 import com.dhairya.newsmemory.data.db.ArchiveDatabase
+import com.dhairya.newsmemory.llm.EntityExtractor
 import com.dhairya.newsmemory.llm.GroqClient
 import com.dhairya.newsmemory.llm.GroqClusterEngine
 import com.dhairya.newsmemory.memory.EntityBackfill
@@ -50,14 +51,24 @@ class AppContainer(private val context: Context) {
     val recurrenceEngine: RecurrenceEngine by lazy { RecurrenceEngine(database.entityDao()) }
 
     /**
-     * Entity backfill for the historical archive (EDD §7.3). Extraction is null without a key,
-     * which Settings surfaces as unavailable rather than failing silently.
+     * Entity backfill for the historical archive (EDD §7.3). Extraction is null without a key —
+     * exactly as `clusterEngine` handles the no-key case — which Settings surfaces as
+     * unavailable rather than failing silently.
+     *
+     * The extractor gets `sourcesFor` so it can enrich each headline with body text before
+     * sending it (§5.1: title-only extraction is nearly blind).
      */
     val entityBackfill: EntityBackfill by lazy {
         EntityBackfill(
             db = database,
             settings = settingsStore,
-            extract = null,   // wired to the extractor in the backfill track
+            extract = groqClient?.let { client ->
+                EntityExtractor(
+                    client,
+                    sourcesFor = { itemId -> database.digestDao().sourcesFor(itemId) },
+                    log = { msg -> Log.d("EntityBackfill", msg) }
+                )::extract
+            },
             log = { msg -> Log.d("EntityBackfill", msg) }
         )
     }
