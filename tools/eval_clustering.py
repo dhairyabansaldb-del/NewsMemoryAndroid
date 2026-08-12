@@ -455,8 +455,18 @@ def main():
 
     data = json.load(open(args.export, encoding="utf-8"))
     windows = defaultdict(list)
+    dropped_unparseable = 0
     for r in data["rawNotifications"]:
+        # DigestPipeline drops UNPARSEABLE rows before Deduper — a row we could not resolve a
+        # headline from has nothing to present. The harness must drop them too, or it measures
+        # a pipeline the app does not ship. Default to FULL: exports predating the
+        # parse_quality column have no such field, and those rows were all admitted.
+        if r.get("parseQuality", "FULL") == "UNPARSEABLE":
+            dropped_unparseable += 1
+            continue
         windows[r["windowBucket"]].append(r)
+    if dropped_unparseable:
+        print(f"dropped {dropped_unparseable} UNPARSEABLE rows (matching DigestPipeline)")
     buckets = sorted(windows)
     if args.only:
         buckets = [b for b in buckets if b == args.only]
