@@ -37,6 +37,12 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+# Entity names and sample headlines are non-ASCII often enough that a cp1252 Windows
+# console would kill the report mid-print. See the same note in eval_entities.py.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from eval_clustering import normalize  # noqa: E402  (path set above)
 

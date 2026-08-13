@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -71,6 +72,7 @@ class BootReceiver : BroadcastReceiver() {
 object CatchupScheduler {
 
     private const val PERIODIC_NAME = "digest-catchup"
+    private const val NOW_NAME = "digest-catchup-now"
 
     /** Hourly safety net (EDD §5.3): any window that closed without a digest row gets run. */
     fun schedulePeriodic(context: Context) {
@@ -80,9 +82,15 @@ object CatchupScheduler {
         )
     }
 
+    /**
+     * Catch up immediately (app start, reboot). Unique + KEEP: a plain enqueue() ran alongside
+     * the periodic worker, so two CatchupWorkers executed concurrently on every launch. That
+     * was free while catch-up only did idempotent digest runs, but it is not free now that the
+     * worker also spends a Groq call on entity backfill.
+     */
     fun scheduleNow(context: Context) {
-        WorkManager.getInstance(context).enqueue(
-            OneTimeWorkRequestBuilder<CatchupWorker>().build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            NOW_NAME, ExistingWorkPolicy.KEEP, OneTimeWorkRequestBuilder<CatchupWorker>().build()
         )
     }
 }

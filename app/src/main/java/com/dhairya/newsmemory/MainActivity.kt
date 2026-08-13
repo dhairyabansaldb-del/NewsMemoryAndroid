@@ -280,9 +280,12 @@ private fun NewsMemoryApp(container: AppContainer, pendingDigestId: String?, onC
                     onRunBackfill = {
                         scope.launch {
                             backfillRunning = true
-                            // One bounded batch per tap. The hourly worker drains the rest, so
-                            // this never becomes a long-running foreground job.
-                            val outcome = runCatching { container.entityBackfill.runBatch() }
+                            // A short drain per tap — long enough to be worth tapping, short
+                            // enough that the row isn't stuck on "Working…". The hourly worker
+                            // does the bulk with a much larger budget.
+                            val outcome = runCatching {
+                                container.entityBackfill.runDrain(budgetMillis = 60_000L)
+                            }
                             backfillFailed =
                                 outcome.getOrNull()?.failed ?: outcome.isFailure
                             backfillRunning = false

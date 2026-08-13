@@ -52,6 +52,13 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+# Real headlines carry rupee signs, em dashes and Devanagari. On Windows the console
+# defaults to cp1252 and printing any of them raises UnicodeEncodeError mid-run — which
+# looks like a harness crash but is only the terminal. Force UTF-8 on our own streams.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # --------------------------------------------------------------- reuse, not re-derive
 # groq_call (incl. its 400/429/5xx retry behaviour), the token estimator, the rolling
 # 60s TPM limiter and the Kotlin-Normalizer-equivalent normalize() are all generic and

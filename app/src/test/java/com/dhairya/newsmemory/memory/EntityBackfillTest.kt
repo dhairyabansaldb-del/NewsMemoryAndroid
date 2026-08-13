@@ -7,8 +7,15 @@ import com.dhairya.newsmemory.data.db.ArchiveDatabase
 import com.dhairya.newsmemory.data.db.Digest
 import com.dhairya.newsmemory.data.db.DigestItem
 import com.dhairya.newsmemory.testing.inMemoryArchive
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -62,6 +69,97 @@ class EntityBackfillTest {
         assertEquals(0L, settings.backfillWatermarkSnapshot())
         assertTrue(db.entityDao().allRefs().isEmpty())
         assertEquals(ids, unattempted())
+    }
+
+    // ---- draining under a budget -----------------------------------------------------------
+
+    @Test
+    fun `drain keeps going until the queue empties`() = runTest {
+        val ids = seedItems("one", "two", "three", "four", "five")
+        val sent = mutableListOf<Long>()
+        val backfill = backfill { items ->
+            sent += items.map { it.id }
+            items.associate { it.id to listOf("E${it.id}") }
+        }
+
+        val outcome = backfill.runDrain(now = { 0L }, pause = {})
+
+        assertEquals(ids, sent)                 // every item, exactly once
+        assertEquals(5, outcome.attempted)
+        assertEquals(0, outcome.remaining)
+    }
+
+    @Test
+    fun `drain stops when the time budget is spent and leaves the rest for the next tick`() = runTest {
+        seedItems("one", "two", "three", "four", "five", "six")
+        var clock = 0L
+        val backfill = backfill { items -> items.associate { it.id to listOf("E${it.id}") } }
+
+        // deadline = 30. After batch 1 the clock is 0 (pause not yet taken) so 0+20 < 30 and it
+        // sleeps to 20; after batch 2, 20+20 >= 30, so it stops with two batches done.
+        val outcome = backfill.runDrain(
+            limit = 2,
+            budgetMillis = 30L,
+            paceMillis = 20L,
+            now = { clock },
+            pause = { clock += it }
+        )
+
+        assertEquals(4, outcome.attempted)      // 2 batches of limit 2
+        assertEquals(2, outcome.remaining)
+        assertFalse(outcome.failed)
+    }
+
+    @Test
+    fun `drain stops on the first failure rather than hammering a dead endpoint`() = runTest {
+        seedItems("one", "two", "three", "four", "five", "six")
+        var calls = 0
+        val backfill = backfill { items ->
+            calls++
+            if (calls == 2) throw IllegalStateException("groq down")
+            items.associate { it.id to listOf("E${it.id}") }
+        }
+
+        val outcome = backfill.runDrain(limit = 2, now = { 0L }, pause = {})
+
+        assertEquals(2, calls)                  // stopped, did not keep retrying
+        assertEquals(2, outcome.attempted)      // only the first batch landed
+        assertTrue(outcome.failed)
+        assertEquals(2L, settings.backfillWatermarkSnapshot())   // held at the failed batch
+    }
+
+    // ---- concurrent callers ----------------------------------------------------------------
+
+    @Test
+    fun `concurrent batches do not extract the same items twice`() = runTest {
+        // Found on device: CatchupWorker runs twice on app start (scheduleNow enqueued alongside
+        // the periodic worker), so two batches read watermark 12 at once and made the SAME Groq
+        // call — `watermark 12 -> 24` logged twice. Harmless to the data, but it doubled the
+        // quota cost of the whole drain.
+        val ids = seedItems("one", "two", "three", "four")
+        val sentBatches = Collections.synchronizedList(mutableListOf<List<Long>>())
+        val started = CountDownLatch(2)
+        val backfill = backfill { items ->
+            sentBatches += items.map { it.id }
+            // Both callers are inside the extractor at once if the gate is missing.
+            started.countDown()
+            started.await(1, TimeUnit.SECONDS)
+            items.associate { it.id to listOf("E${it.id}") }
+        }
+
+        coroutineScope {
+            listOf(
+                async(Dispatchers.IO) { backfill.runBatch(limit = 2) },
+                async(Dispatchers.IO) { backfill.runBatch(limit = 2) }
+            ).awaitAll()
+        }
+
+        // Two batches ran, but over DIFFERENT items — the second saw the advanced watermark.
+        assertEquals(2, sentBatches.size)
+        val allSent = sentBatches.flatten()
+        assertEquals("no item was sent to extraction twice", allSent.size, allSent.toSet().size)
+        assertEquals(ids.toSet(), allSent.toSet())
+        assertEquals(ids.last(), settings.backfillWatermarkSnapshot())
     }
 
     // ---- the success path ------------------------------------------------------------------

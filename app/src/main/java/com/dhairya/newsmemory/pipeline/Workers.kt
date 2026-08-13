@@ -79,17 +79,19 @@ class CatchupWorker(
         }
         DigestAlarmScheduler.scheduleNext(applicationContext)
 
-        // ONE bounded entity-backfill batch per tick (EDD §7.3), last so it can never delay the
-        // digests or the alarm chain. Hourly × 12 items drains the archive over days, which is
-        // the intent: an unbounded pass would fire ~250 Groq calls in one go and spend the free
-        // tier's daily quota. A failure here is a backfill problem, not a catch-up problem — the
-        // batch retries next tick on its own (the watermark doesn't advance), so it must not
-        // fail the worker and trigger a WorkManager retry of the digest work above.
+        // Entity backfill (EDD §7.3), last so it can never delay the digests or the alarm chain.
+        // A time-budgeted drain rather than a single batch: one batch per hourly tick would take
+        // ten days to cover the archive, which gives back most of the reason for backfilling at
+        // all. runDrain paces itself against the TPM cap and stops on the first failure.
+        //
+        // A failure here is a backfill problem, not a catch-up problem — the watermark doesn't
+        // advance, so it retries next tick on its own. It must not fail the worker and trigger a
+        // WorkManager retry of the digest work above.
         try {
             val backfill = app.container.entityBackfill
-            if (backfill.available) backfill.runBatch()
+            if (backfill.available) backfill.runDrain()
         } catch (e: Exception) {
-            Log.w("EntityBackfill", "catch-up backfill batch failed", e)
+            Log.w("EntityBackfill", "catch-up backfill drain failed", e)
         }
         return Result.success()
     }
