@@ -1,9 +1,9 @@
 # PROJECT_MEMORY.md — News Memory (Android)
 
 > Context-handoff doc for an engineer with zero prior context. Prioritizes the
-> non-obvious: decisions, reasoning, history, gotchas. Last updated 2026-08-11.
+> non-obvious: decisions, reasoning, history, gotchas. Last updated 2026-08-13.
 > **Start here: §8 (current state), §5.1 (why Phase 5 looks the way it does), and
-> §5.2 (v1 and why the archive needed backfilling).**
+> §5.2 (v1 and why the archive needed backfilling, including what device testing found).**
 
 **Naming note:** the app is **News Memory** (package `com.dhairya.newsmemory`). The
 working folder is `C:\Signals Noted project` and an early idea name was "Signals Noted";
@@ -13,8 +13,8 @@ the Groq/Kotlin stack. There is no Marginalia code here.
 
 This project uses **v0 / v1 / v2** phasing, not "V1/V1.5". Map accordingly: v0 = the
 internal data-pipe milestone (**shipped, in daily use since 2026-07**), v1 = the shippable
-memory layer, i.e. recurrence (**code-complete 2026-08-11, not yet verified on device** — §8),
-v2 = future graph UI.
+memory layer, i.e. recurrence (**code-complete 2026-08-11; backfill mechanics verified live
+on-device 2026-08-13, two real bugs found and fixed** — §8, §5.2), v2 = future graph UI.
 
 ---
 
@@ -265,6 +265,60 @@ not `\r`. With `core.autocrlf=true` and no `.gitattributes`, **any fresh clone o
 to compile** (~200 errors in generated code). A long-lived working tree hides it because its copy
 is already LF. Fixed in `esc()` *and* pinned via `.gitattributes`.
 
+**Verified live on-device 2026-08-13 — two bugs the test suite could not have caught, both
+found within minutes of a real install:**
+
+1. **Concurrent batches did duplicate work.** `CatchupScheduler.scheduleNow` used a plain
+   `enqueue()` with no unique name, so it ran alongside the periodic worker and two
+   `CatchupWorker`s executed on every app start. Logcat showed two batches reading watermark 12
+   at once and making the **same** Groq call (`watermark 12 → 24` logged twice). Harmless to the
+   data — `link` uses `INSERT IGNORE` and `upsert` merges on `normalized` — but it doubled the
+   quota cost of the whole drain. It was free before v1, when catch-up only did idempotent
+   digest runs; nobody had reason to notice. Fixed on both sides: `scheduleNow` is now
+   unique+KEEP, and `EntityBackfill` holds a `Mutex` so read-watermark → extract → link →
+   advance is serialised regardless of caller. The regression test fails if the mutex is removed
+   (verified by removing it).
+
+2. **The drain would have taken ten days.** One batch of 12 per hourly tick is
+   3,008 / 12 = 250 hours. The whole argument for backfilling instead of waiting for new data was
+   to avoid a month-long wait, so ten days gave most of that back. The one-batch bound was
+   justified as protecting the free tier's **daily** quota, but the numbers don't support it: the
+   daily allowance is ~14,400 requests and the entire backfill is 250 calls. The real constraint
+   is **TPM**, which permits roughly one batch every 21 seconds — so the whole archive is
+   **~90 minutes** of API time, not ten days. Fixed with `EntityBackfill.runDrain()`: batches run
+   back-to-back, paced to the TPM limit, bounded by wall-clock (5 min per hourly tick, 60s per
+   Settings tap — WorkManager kills a worker at 10 minutes) rather than by batch count, and it
+   stops on the first failure instead of hammering a dead endpoint for the rest of the budget.
+
+Also fixed in the same pass: both eval harnesses crashed on Windows (`UnicodeEncodeError`) the
+moment a headline contained a rupee sign or em dash, because the console defaults to cp1252 —
+`sys.stdout.reconfigure(encoding="utf-8")` at the top of each script.
+
+**The extraction prompt was quality-checked before being trusted with the real archive** — the
+same discipline as §5.1's clustering harness. 60 items from the July 17 export were run through
+`tools/eval_entities.py` against the *live* Groq API (not a mock) and read by hand:
+
+| metric | result | reads as |
+|---|---|---|
+| zero-entity rate | 25% | inside the 10–35% sane band |
+| **countable share** | **41.6%** | above the ~40% gate |
+| publisher-name hits | 0 | prompt is not extracting outlet names |
+| generic-word hits | 0 | prompt is not extracting category nouns |
+
+One real miss: `"FIFA World Cup"` and `"FIFA World Cup 2026"` did not collapse to the same
+normalised key, splitting one entity's count in two — a near-duplicate-key gap in
+`Normalizer.normalize`, not a prompt problem (§9).
+
+**Confirmed live on the phone, in this order:** a single batch during a cold app-start;
+`runDrain` continuing correctly across multiple app opens (watermark 12 → 420 observed, then
+further via the Settings button); zero malformed-response failures (one JSON hiccup self-healed
+via the existing one-reask retry); no crashes in `AndroidRuntime:E`.
+
+**Not yet confirmed:** whether the recurrence chips and the "What's building" card actually
+*render* correctly — the device was on its lockscreen throughout this session and a screenshot
+could not get past it. The backfill mechanics are proven; the UI consuming its output has only
+been verified by code review, not by eye. §8/§9.
+
 ---
 
 ## 5.1 PHASE 5 (GROQ): WHY IT LOOKS THE WAY IT DOES
@@ -408,7 +462,7 @@ chips, no "basic grouping" tag.
   `WindowCalculator`, `RebinderLogic`, `ClusterResponseParser` are pure objects with unit
   tests. Prefer this pattern — it's why the LLM repair logic is testable without a network.
 - **Tests:** JUnit + Robolectric + in-memory Room; Ktor `MockEngine` for the Groq path (no
-  network in tests). 174 unit tests currently green. Run:
+  network in tests). 178 unit tests currently green. Run:
   ```
   $env:JAVA_HOME="C:\Users\bandh\android-tools\jdk\jdk-17.0.19+10"
   .\gradlew.bat testDebugUnitTest
@@ -440,33 +494,38 @@ chips, no "basic grouping" tag.
 
 ---
 
-## 8. CURRENT STATE — v1 is code-complete and UNVERIFIED ON DEVICE
+## 8. CURRENT STATE — v1's backfill mechanics are verified live; the UI is not yet seen running
 
 **Done:** Phases 1–4, A, B, C, Phase C feedback, Phase 5 (Groq, §5.1), and **v1 (recurrence,
-§5.2)**. HEAD is `f210f51`, working tree clean, pushed to
-`github.com/dhairyabansaldb-del/NewsMemoryAndroid` (branch `master`). **174 unit tests green,
+§5.2)**. HEAD is `f2d76b5`, working tree clean, pushed to
+`github.com/dhairyabansaldb-del/NewsMemoryAndroid` (branch `master`). **178 unit tests green,
 `assembleDebug` clean, zero compiler warnings, `check_shared_sync.py` in sync.**
 
 v0's gate is **passed by observation, not by a formal test**: three weeks of daily use, digests
 arriving on schedule and the listener surviving overnight — you'd have noticed weeks of silence.
 Treat overnight survival as confirmed empirically but never instrumented.
 
-**Exactly where we left off — READ THIS FIRST:** every line of v1 is written and unit-tested,
-and **none of it has run on the phone.** The device has not been connected since v1 began. In
-particular the entity backfill has **never made a real Groq call** — every test uses MockEngine.
-Nothing is in flight in git; the gap is verification, not code.
+**Exactly where we left off:** v1 was installed on the phone 2026-08-13. The backfill drain has
+now made real, live Groq calls — hundreds of them — and is actively working through the archive.
+Two real bugs surfaced in that process and were fixed and pushed (`f2d76b5`); see §5.2 for the
+full account. The extraction prompt was also hand-validated against 60 real archive items before
+being trusted (§5.2) — countable share 41.6%, zero publisher/generic junk.
 
-**The immediate next step is on-device verification, in this order:**
-1. Install, open Settings → **"Build memory from archive"**. Tap once and watch one batch of 12.
-   `adb logcat EntityBackfill:V '*:S'` prints attempted/linked/watermark per batch.
-2. **Hand-check the entities it wrote before letting it drain.** This is the §5.1 discipline: LLM
-   output quality on real notification text is not settled by unit tests. If they look wrong,
-   change `shared/entity-prompt-v1.txt`, `reset()`, and re-run — that is what reset is for.
-   `tools/eval_entities.py` can rehearse the same prompt offline against an export first.
-3. Let it drain (~250 batches, hourly worker, bounded 12/tick), then confirm recurrence chips
-   appear on genuinely recurring stories and "What's building" shows a real entity.
-4. Confirm no clustering regression: `adb logcat GroqCluster:V '*:S'` still prints
+**What is NOT yet confirmed: the UI.** The backfill's data-side correctness is proven by logcat
+and by hand-inspecting extracted entities, but nobody has *looked at the screen* and seen a
+recurrence chip or a filled-in "What's building" card. The device was locked throughout the
+verification session. This is the actual next step, not a formality:
+
+1. Unlock the phone, open a digest with recurring stories, and confirm chips read sensibly
+   (e.g. "4th this week") on items that are genuinely recurring, and are absent elsewhere.
+2. Open Home and confirm "What's building" shows a real entity with a sensible dot matrix, not
+   the empty-state copy (it will stay empty until an entity clears
+   `RecurrenceEngine.MIN_ITEMS_PER_WEEK` etc. — that may take a few more hours of draining).
+3. Confirm no clustering regression: `adb logcat GroqCluster:V '*:S'` still prints
    `LLM ok: N stories → M clusters`.
+4. Let the backfill keep draining (`adb logcat EntityBackfill:V '*:S'` shows batches at ~21s
+   apart when actively running); it resumes on its own via the hourly `CatchupWorker` even with
+   the app closed.
 
 **Then the 30-day kill-gate** — the real go/no-go, and a *product* question no amount of code
 quality settles: do the recurrence pushes surface things the owner didn't already know?
@@ -477,14 +536,16 @@ Backfill is what lets this be judged on June–August history instead of restart
 ## 9. OPEN THREADS / TODOs
 
 Blocking the kill-gate:
-- **Nothing in v1 has run on the device.** See §8. The backfill has never made a live Groq call.
-- **Entity extraction quality is unvalidated on real data.** The offline harness
-  (`tools/eval_entities.py`) exists precisely so this can be checked before trusting it; it has
-  not been run against a real export. Its headline metric is **countable share** — the fraction
-  of extracted mentions whose normalised key appears in 2+ digest items. Everything outside it
-  is a row that can never produce a recurrence. Gate around ~40%, then read samples by hand.
+- **The UI has not been visually confirmed.** See §8. Recurrence chips and "What's building"
+  are wired and unit-tested, but nobody has watched them render on a real digest with real
+  recurring entities. Do this before treating v1 as done, not just committed.
 
 Known gaps (real, not blocking):
+- **A near-duplicate entity key didn't collapse.** Found during the 60-item quality check (§5.2):
+  `"FIFA World Cup"` and `"FIFA World Cup 2026"` normalise to two different keys and split one
+  entity's recurrence count. `Normalizer.normalize` has no near-dup handling — it's exact-match
+  after case/whitespace folding. Worth revisiting if the live archive shows the same pattern at
+  scale; not worth a speculative fix on one sample.
 - **"What's building" is not tappable.** The design says tapping opens that signal's cluster;
   there is no navigation callback and no destination screen yet. A comment marks the spot.
 - **`llama-3.3-70b-versatile` (EDD §7.2, the one-shot query) is being deprecated by Groq.** The
@@ -501,10 +562,15 @@ Known gaps (real, not blocking):
 - **`docs/Visualizer.html` is not usable as a reference** — a JS bundle, so screen markup isn't
   greppable. The UI was built from `docs/README.md` prose alone.
 
-Resolved since the last revision: `fallbackToDestructiveMigration()` **removed** (v1 needed no
-migration, so nothing had to be written); junk capture rows now UNPARSEABLE *and* excluded from
-digests; `NewsListener` chatter quieted behind a `VERBOSE` flag (and `onListenerDisconnected`
-added — nothing was reporting the unbind); "What's building" is real.
+Resolved since the last revision: **v1 verified live on-device** — the duplicate-batch race and
+the ten-day drain bug (§5.2), both found within minutes of a real install and both fixed;
+entity-extraction quality hand-checked against real archive data (countable share 41.6%); the two
+eval harnesses' Windows console crash (`UnicodeEncodeError` on rupee signs / em dashes) fixed.
+
+Resolved earlier: `fallbackToDestructiveMigration()` **removed** (v1 needed no migration, so
+nothing had to be written); junk capture rows now UNPARSEABLE *and* excluded from digests;
+`NewsListener` chatter quieted behind a `VERBOSE` flag (and `onListenerDisconnected` added —
+nothing was reporting the unbind); "What's building" is real.
 
 Open questions:
 - **UNCERTAIN:** whether web/browser push sources are in scope (PRD left this open); whether
